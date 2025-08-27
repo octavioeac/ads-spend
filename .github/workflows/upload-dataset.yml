@@ -1,0 +1,49 @@
+name: Upload dataset to GCS
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "data/**"
+  workflow_dispatch: {}   # opcional: ejecutarlo manualmente
+
+concurrency:
+  group: upload-dataset
+  cancel-in-progress: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          export_default_credentials: true
+
+      - name: Verify gcloud
+        run: gcloud info
+
+      - name: Upload data/ to GCS with metadata
+        env:
+          BUCKET: ${{ secrets.BUCKET }}  # ej. n8n-ads-spend-raw
+        run: |
+          set -euo pipefail
+          : "${BUCKET:?Define el secreto BUCKET con el nombre del bucket}"
+          LOAD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          shopt -s nullglob
+          for f in data/*; do
+            [ -f "$f" ] || continue
+            base="$(basename "$f")"
+            gsutil -h "x-goog-meta-load_date:${LOAD_DATE}" \
+                   -h "x-goog-meta-source_file_name:${base}" \
+                   cp "$f" "gs://${BUCKET}/${base}"
+            echo "Subido: $f → gs://${BUCKET}/${base}"
+          done
