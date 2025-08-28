@@ -102,7 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Auth OIDC (sin llaves)
+      # Auth OIDC
       - id: auth
         uses: google-github-actions/auth@v2
         with:
@@ -116,7 +116,6 @@ jobs:
         id: img
         run: echo "IMAGE=${{ env.LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
 
-      # --- NUEVO: generamos un script, lo copiamos y lo ejecutamos en la VM ---
       - name: Write remote deploy script
         run: |
           cat > deploy_remote.sh <<'EOSH'
