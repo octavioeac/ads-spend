@@ -1,0 +1,118 @@
+name: CI/CD n8n
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "docker/**"
+      - ".github/workflows/cicd.yml"
+
+env:
+  LOCATION: us
+  REPO: n8n-repo
+  IMAGE_NAME: n8n
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set PROJECT_ID
+        run: echo "PROJECT_ID=$(gcloud config get-value project)" >> $GITHUB_ENV
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev -q
+
+      - name: Build image
+        run: |
+          IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
+          TAG="${GITHUB_SHA::8}"
+          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+
+      - name: Test container (healthcheck)
+        run: |
+          IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
+          TAG="${GITHUB_SHA::8}"
+          docker run -d --name n8n-test -p 5678:5678 \
+            -e N8N_HOST=localhost \
+            -e N8N_PROTOCOL=http \
+            -e N8N_BASIC_AUTH_ACTIVE=true \
+            -e N8N_BASIC_AUTH_USER=test \
+            -e N8N_BASIC_AUTH_PASSWORD=test123 \
+            "$IMAGE:$TAG"
+          sleep 20
+          curl -f http://localhost:5678/healthz
+          docker logs n8n-test --tail=120 || true
+          docker rm -f n8n-test
+
+      - name: Push image
+        run: |
+          IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
+          TAG="${GITHUB_SHA::8}"
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+
+  deploy-gce:
+    needs: build-test-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH to GCE VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCE_VM_IP }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            PROJECT_ID=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id || echo "${{ env.PROJECT_ID }}")
+            IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest"
+
+            # Login a Artifact Registry en la VM (requiere gcloud instalado y login previo)
+            if ! command -v gcloud >/dev/null 2>&1; then
+              echo "Instalando gcloud..."
+              sudo apt-get update && sudo apt-get install -y curl apt-transport-https ca-certificates gnupg
+              echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+              curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+              sudo apt-get update && sudo apt-get install -y google-cloud-sdk
+            fi
+            gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev -q || true
+
+            # Asegura Docker
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "Instalando Docker..."
+              sudo apt-get update && sudo apt-get install -y docker.io
+              sudo systemctl enable --now docker
+            fi
+
+            # Crea .env persistente si no existe
+            sudo mkdir -p /data/n8n
+            if [ ! -f /data/n8n/.env ]; then
+              cat <<EOF | sudo tee /data/n8n/.env
+N8N_BASIC_AUTH_ACTIVE=true
+N8N_BASIC_AUTH_USER=${{ secrets.N8N_BASIC_AUTH_USER }}
+N8N_BASIC_AUTH_PASSWORD=${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
+N8N_ENCRYPTION_KEY=${{ secrets.N8N_ENCRYPTION_KEY }}
+N8N_HOST=$(curl -s ifconfig.me || echo localhost)
+N8N_PROTOCOL=http
+EOF
+            fi
+
+            # Pull & restart
+            sudo docker pull "$IMAGE"
+            sudo docker rm -f n8n || true
+            sudo docker run -d --name n8n -p 80:5678 \
+              --restart unless-stopped \
+              --env-file /data/n8n/.env \
+              -v /data/n8n:/home/node/.n8n \
+              "$IMAGE"
+
+            # Espera y verifica health
+            sleep 10
+            sudo docker logs n8n --tail=80 || true
