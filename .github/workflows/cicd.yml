@@ -123,8 +123,7 @@ jobs:
           gcloud compute ssh n8n-vm \
             --project="${PROJECT_ID}" \
             --zone="${ZONE}" \
-            --tunnel-through-iap=false \
-            --command "
+            --command "$(cat <<'EOSSH'
               set -euo pipefail
   
               echo 'Ensuring gcloud on VM...'
