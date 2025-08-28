@@ -4,7 +4,7 @@ FROM n8nio/n8n:latest
 ENV TZ=America/Mexico_City \
     N8N_DIAGNOSTICS_ENABLED=false
 
-# Opcional: utilidades
+# Opcional: util
 USER root
 RUN apt-get update && apt-get install -y curl vim && rm -rf /var/lib/apt/lists/*
 USER node
