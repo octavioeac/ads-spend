@@ -102,15 +102,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Auth OIDC
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: "projects/237577500123/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
           service_account: "github-test@n8n-ads-spend.iam.gserviceaccount.com"
 
-      - name: Setup gcloud
+      - name: Setup gcloud (with beta)
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: beta
+          project_id: ${{ env.PROJECT_ID }}
 
       - name: Build image ref for deploy
         id: img
@@ -121,25 +123,20 @@ jobs:
           cat > deploy_remote.sh <<'EOSH'
           #!/usr/bin/env bash
           set -euo pipefail
-
           IMAGE="$1"
 
-          echo "[VM] Ensure Docker..."
+          # Docker
           if ! command -v docker >/dev/null 2>&1; then
             sudo apt-get update -y
             sudo apt-get install -y docker.io
             sudo systemctl enable --now docker
           fi
 
-          echo "[VM] Configure Docker (Artifact Registry helper)..."
-          # Esto configura el credHelper. En GCE, Docker usará el token del metadata server
-          # si la VM/SA tiene roles/artifactregistry.reader
+          # Artifact Registry helper (no rompe si ya está)
           gcloud auth configure-docker us-docker.pkg.dev --quiet || true
 
-          echo "[VM] Ensure env dir..."
+          # Env
           sudo mkdir -p /data/n8n
-
-          echo "[VM] Write .env (idempotente)..."
           {
             echo "N8N_BASIC_AUTH_ACTIVE=true"
             echo "N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}"
@@ -149,7 +146,7 @@ jobs:
             echo "N8N_PROTOCOL=http"
           } | sudo tee /data/n8n/.env >/dev/null
 
-          echo "[VM] Pull & Run n8n..."
+          # Deploy
           sudo docker pull "${IMAGE}"
           sudo docker rm -f n8n || true
           sudo docker run -d --name n8n -p 80:5678 \
@@ -158,27 +155,26 @@ jobs:
             -v /data/n8n:/home/node/.n8n \
             "${IMAGE}"
 
-          echo "[VM] Logs tail:"
           sleep 10
           sudo docker logs n8n --tail=80 || true
           EOSH
           chmod +x deploy_remote.sh
 
-      - name: Copy script to VM
+      - name: Copy script to VM (beta scp)
         run: |
-          gcloud compute scp \
+          gcloud beta compute scp \
             --project="${{ env.PROJECT_ID }}" \
             --zone="${{ env.ZONE }}" \
             ./deploy_remote.sh n8n-vm:/tmp/deploy_remote.sh
 
-      - name: Run remote deploy
+      - name: Run remote deploy (beta ssh)
         env:
           IMAGE: ${{ steps.img.outputs.IMAGE }}
           N8N_BASIC_AUTH_USER: ${{ secrets.N8N_BASIC_AUTH_USER }}
           N8N_BASIC_AUTH_PASSWORD: ${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
           N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
-          gcloud compute ssh n8n-vm \
+          gcloud beta compute ssh n8n-vm \
             --project="${{ env.PROJECT_ID }}" \
             --zone="${{ env.ZONE }}" \
             --command "N8N_BASIC_AUTH_USER='${N8N_BASIC_AUTH_USER}' N8N_BASIC_AUTH_PASSWORD='${N8N_BASIC_AUTH_PASSWORD}' N8N_ENCRYPTION_KEY='${N8N_ENCRYPTION_KEY}' bash /tmp/deploy_remote.sh '${IMAGE}'"
