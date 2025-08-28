@@ -1,5 +1,5 @@
 # Dockerfile
-FROM n8nio/n8n:latest
+FROM n8nio/n8n:latest-debian
 
 ENV TZ=America/Mexico_City \
     N8N_DIAGNOSTICS_ENABLED=false
