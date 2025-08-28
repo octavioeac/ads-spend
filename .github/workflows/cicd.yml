@@ -162,7 +162,7 @@ jobs:
 
       - name: Copy script to VM (beta scp)
         run: |
-          gcloud beta compute scp \
+          gcloud beta compute ssh \
             --project="${{ env.PROJECT_ID }}" \
             --zone="${{ env.ZONE }}" \
             ./deploy_remote.sh n8n-vm:/tmp/deploy_remote.sh
