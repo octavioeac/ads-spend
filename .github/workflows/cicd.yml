@@ -86,43 +86,11 @@ jobs:
           docker push "$IMAGE:latest"
 
   deploy-gce:
-      needs: build-test-push
-      runs-on: ubuntu-latest
-      permissions:
-        id-token: write
-        contents: read
-    
-      env:
-        PROJECT_ID: n8n-ads-spend
-        ZONE: us-central1-a
-        LOCATION: us
-        REPO: n8n-repo
-        IMAGE_NAME: n8n
-    
-      steps:
-        - uses: actions/checkout@v4
-    
-        # Auth OIDC 
-        - id: auth
-          uses: google-github-actions/auth@v2
-          with:
-             workload_identity_provider: "projects/237577500123/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-             service_account: "github-test@n8n-ads-spend.iam.gserviceaccount.com"
-    
-        - name: Setup gcloud
-          uses: google-github-actions/setup-gcloud@v2
-    
-        # - run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev --quiet
-    
-        - name: Deploy (single SSH with heredoc)
-              run: |
-                set -euo pipefail
-                PROJECT_ID="n8n-ads-spend"
-                ZONE="us-central1-a"
-                LOCATION="us"
-                REPO="n8n-repo"
-                IMAGE_NAME="n8n"
-                IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
+    needs: build-test-push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
   
     env:
       PROJECT_ID: n8n-ads-spend
@@ -145,29 +113,30 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
   
       # - run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev --quiet
-  
       - name: Deploy (single SSH with heredoc)
-            run: |
-              set -euo pipefail
-              PROJECT_ID="n8n-ads-spend"
-              ZONE="us-central1-a"
-              LOCATION="us"
-              REPO="n8n-repo"
-              IMAGE_NAME="n8n"
-              IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
+        run: |
+          set -euo pipefail
+          PROJECT_ID="n8n-ads-spend"
+          ZONE="us-central1-a"
+          LOCATION="us"
+          REPO="n8n-repo"
+          IMAGE_NAME="n8n"
+          IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
 
-              gcloud compute ssh n8n-vm \
-                --project="${PROJECT_ID}" \
-                --zone="${ZONE}" \
-                --command "$(cat <<'EOSSH'
-                  set -euo pipefail
-                  IMAGE_PLACEHOLDER="__IMAGE__"
-                  N8N_BASIC_AUTH_USER_PLACEHOLDER="__USR__"
-                  N8N_BASIC_AUTH_PASSWORD_PLACEHOLDER="__PWD__"
-                  N8N_ENCRYPTION_KEY_PLACEHOLDER="__KEY__"
-          EOSSH
-                )" \
-              | sed -e "s#__IMAGE__#${IMAGE}#g" \
-                    -e "s#__USR__#${{ secrets.N8N_BASIC_AUTH_USER }}#g" \
-                    -e "s#__PWD__#${{ secrets.N8N_BASIC_AUTH_PASSWORD }}#g" \
-                    -e "s#__KEY__#${{ secrets.N8N_ENCRYPTION_KEY }}#g"
+          gcloud compute ssh n8n-vm \
+            --project="${PROJECT_ID}" \
+            --zone="${ZONE}" \
+            --command "$(cat <<'EOSSH'
+              set -euo pipefail
+              IMAGE_PLACEHOLDER="__IMAGE__"
+              N8N_BASIC_AUTH_USER_PLACEHOLDER="__USR__"
+              N8N_BASIC_AUTH_PASSWORD_PLACEHOLDER="__PWD__"
+              N8N_ENCRYPTION_KEY_PLACEHOLDER="__KEY__"
+
+              # (… mismo contenido del script …) usando las variables *_PLACEHOLDER
+            EOSSH
+                  )" \
+                | sed -e "s#__IMAGE__#${IMAGE}#g" \
+                      -e "s#__USR__#${{ secrets.N8N_BASIC_AUTH_USER }}#g" \
+                      -e "s#__PWD__#${{ secrets.N8N_BASIC_AUTH_PASSWORD }}#g" \
+                      -e "s#__KEY__#${{ secrets.N8N_ENCRYPTION_KEY }}#g"
