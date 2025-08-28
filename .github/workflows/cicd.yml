@@ -37,7 +37,7 @@ jobs:
           # adjust the -f path if your Dockerfile is in a different folder
           docker build -f docker/Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
 
-      - name: Test container (healthcheck)
+      - name: Test container(healthcheck)
         run: |
           IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
           TAG="${GITHUB_SHA::8}"
