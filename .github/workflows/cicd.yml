@@ -36,7 +36,7 @@ jobs:
           TAG="${GITHUB_SHA::8}"
           docker build \
             -f docker/Dockerfile \
-            --build-arg N8N_VERSION=1.66.1 \
+            --build-arg N8N_VERSION=1.108.2 \
             -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
 
       - name: Test container(healthcheck)

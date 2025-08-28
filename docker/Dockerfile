@@ -1,7 +1,7 @@
 # docker/Dockerfile
 FROM node:18-alpine
 
-ARG N8N_VERSION=1.66.1
+ARG N8N_VERSION=1.108.2
 ENV N8N_VERSION=${N8N_VERSION}
 
 # Runtime + build deps needed to install n8n
