@@ -8,7 +8,7 @@ on:
       - ".github/workflows/cicd.yml"
 
 env:
-  LOCATION: us           # "us" if your Artifact Registry is multi-region (us-docker.pkg.dev)
+  LOCATION: us          
   REPO: n8n-repo
   IMAGE_NAME: n8n
 
@@ -39,10 +39,11 @@ jobs:
             --build-arg N8N_VERSION=1.108.2 \
             -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
 
-      - name: Test container(healthcheck)
+      - name: Test container (wait for health)
         run: |
           IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
           TAG="${GITHUB_SHA::8}"
+
           docker run -d --name n8n-test -p 5678:5678 \
             -e N8N_HOST=localhost \
             -e N8N_PROTOCOL=http \
@@ -50,11 +51,32 @@ jobs:
             -e N8N_BASIC_AUTH_USER=test \
             -e N8N_BASIC_AUTH_PASSWORD=test123 \
             "$IMAGE:$TAG"
-          echo "⏳ Waiting for n8n to start..."
-          sleep 20
-          curl -fsS http://localhost:5678/healthz
-          docker logs n8n-test --tail=60 || true
+
+          echo "Waiting for n8n /healthz ..."
+          # Up to ~90s total (18 tries * 5s)
+          for i in $(seq 1 18); do
+            if curl -fsS http://localhost:5678/healthz >/dev/null 2>&1; then
+              echo "*****  ***  n8n is healthy *** *** *** ***"
+              ok=1
+              break
+            fi
+            echo "… not ready yet (${i}), sleeping 5s"
+            sleep 5
+            # Print last lines to help with debugging while waiting
+            docker ps -a || true
+            docker logs --tail=50 n8n-test || true
+          done
+
+          if [ "${ok:-0}" != "1" ]; then
+            echo "n8n did not become healthy in time"
+            docker ps -a || true
+            docker logs n8n-test || true
+            exit 7
+          fi
+
+          # Clean up
           docker rm -f n8n-test
+
 
       - name: Push image to Artifact Registry
         run: |
@@ -107,7 +129,7 @@ jobs:
 
             IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest"
 
-            echo "📦 Preparing environment file..."
+            echo "Preparing environment file..."
             sudo mkdir -p /data/n8n
             if [ ! -f /data/n8n/.env ]; then
               echo "N8N_BASIC_AUTH_ACTIVE=true" | sudo tee /data/n8n/.env
