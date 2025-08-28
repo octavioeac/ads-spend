@@ -1,22 +1,21 @@
-#Dockerfile
-FROM node:12.13.0-alpine
+# docker/Dockerfile
+FROM node:18-alpine
 
-ARG N8N_VERSION=1.66.1  
+ARG N8N_VERSION=1.66.1
+ENV N8N_VERSION=${N8N_VERSION}
 
-RUN if [ -z "$N8N_VERSION" ] ; then echo "The N8N_VERSION argument is missing!" ; exit 1; fi
+# Runtime + build deps needed to install n8n
+RUN apk add --no-cache \
+      graphicsmagick \
+      tzdata \
+      python3 \
+      make \
+      g++ \
+      git
 
-# Update everything and install needed dependencies
-RUN apk add --update graphicsmagick tzdata
-
-# # Set a custom user to not have n8n run as root
-USER root
-
-# Install n8n and the also temporary all the packages
-# it needs to build it correctly.
-RUN apk --update add --virtual build-dependencies python build-base ca-certificates && \
-	npm_config_user=root npm install -g n8n@${N8N_VERSION} && \
-	apk del build-dependencies
+# Install n8n globally
+RUN npm_config_user=root npm install -g n8n@${N8N_VERSION}
 
 WORKDIR /data
-
+EXPOSE 5678
 CMD ["n8n"]
