@@ -34,8 +34,10 @@ jobs:
         run: |
           IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
           TAG="${GITHUB_SHA::8}"
-          # adjust the -f path if your Dockerfile is in a different folder
-          docker build -f docker/Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker build \
+            -f docker/Dockerfile \
+            --build-arg N8N_VERSION=1.66.1 \
+            -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
 
       - name: Test container(healthcheck)
         run: |
