@@ -91,52 +91,95 @@ jobs:
     permissions:
       id-token: write
       contents: read
-  
+
     env:
       PROJECT_ID: n8n-ads-spend
       ZONE: us-central1-a
       LOCATION: us
       REPO: n8n-repo
       IMAGE_NAME: n8n
-  
+
     steps:
       - uses: actions/checkout@v4
-  
-      # Auth OIDC 
+
+      # Auth OIDC (sin llaves)
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-           workload_identity_provider: "projects/237577500123/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-           service_account: "github-test@n8n-ads-spend.iam.gserviceaccount.com"
-  
+          workload_identity_provider: "projects/237577500123/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+          service_account: "github-test@n8n-ads-spend.iam.gserviceaccount.com"
+
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
-  
-      # - run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev --quiet
-      - name: Deploy (single SSH with heredoc)
+
+      - name: Build image ref for deploy
+        id: img
+        run: echo "IMAGE=${{ env.LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
+
+      # --- NUEVO: generamos un script, lo copiamos y lo ejecutamos en la VM ---
+      - name: Write remote deploy script
         run: |
+          cat > deploy_remote.sh <<'EOSH'
+          #!/usr/bin/env bash
           set -euo pipefail
-          PROJECT_ID="n8n-ads-spend"
-          ZONE="us-central1-a"
-          LOCATION="us"
-          REPO="n8n-repo"
-          IMAGE_NAME="n8n"
-          IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
 
+          IMAGE="$1"
+
+          echo "[VM] Ensure Docker..."
+          if ! command -v docker >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y docker.io
+            sudo systemctl enable --now docker
+          fi
+
+          echo "[VM] Configure Docker (Artifact Registry helper)..."
+          # Esto configura el credHelper. En GCE, Docker usará el token del metadata server
+          # si la VM/SA tiene roles/artifactregistry.reader
+          gcloud auth configure-docker us-docker.pkg.dev --quiet || true
+
+          echo "[VM] Ensure env dir..."
+          sudo mkdir -p /data/n8n
+
+          echo "[VM] Write .env (idempotente)..."
+          {
+            echo "N8N_BASIC_AUTH_ACTIVE=true"
+            echo "N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}"
+            echo "N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}"
+            echo "N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}"
+            echo "N8N_HOST=$(curl -s ifconfig.me || echo localhost)"
+            echo "N8N_PROTOCOL=http"
+          } | sudo tee /data/n8n/.env >/dev/null
+
+          echo "[VM] Pull & Run n8n..."
+          sudo docker pull "${IMAGE}"
+          sudo docker rm -f n8n || true
+          sudo docker run -d --name n8n -p 80:5678 \
+            --restart unless-stopped \
+            --env-file /data/n8n/.env \
+            -v /data/n8n:/home/node/.n8n \
+            "${IMAGE}"
+
+          echo "[VM] Logs tail:"
+          sleep 10
+          sudo docker logs n8n --tail=80 || true
+          EOSH
+          chmod +x deploy_remote.sh
+
+      - name: Copy script to VM
+        run: |
+          gcloud compute scp \
+            --project="${{ env.PROJECT_ID }}" \
+            --zone="${{ env.ZONE }}" \
+            ./deploy_remote.sh n8n-vm:/tmp/deploy_remote.sh
+
+      - name: Run remote deploy
+        env:
+          IMAGE: ${{ steps.img.outputs.IMAGE }}
+          N8N_BASIC_AUTH_USER: ${{ secrets.N8N_BASIC_AUTH_USER }}
+          N8N_BASIC_AUTH_PASSWORD: ${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
+          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+        run: |
           gcloud compute ssh n8n-vm \
-            --project="${PROJECT_ID}" \
-            --zone="${ZONE}" \
-            --command "$(cat <<'EOSSH'
-              set -euo pipefail
-              IMAGE_PLACEHOLDER="__IMAGE__"
-              N8N_BASIC_AUTH_USER_PLACEHOLDER="__USR__"
-              N8N_BASIC_AUTH_PASSWORD_PLACEHOLDER="__PWD__"
-              N8N_ENCRYPTION_KEY_PLACEHOLDER="__KEY__"
-
-              # (… mismo contenido del script …) usando las variables *_PLACEHOLDER
-            EOSSH
-                  )" \
-                | sed -e "s#__IMAGE__#${IMAGE}#g" \
-                      -e "s#__USR__#${{ secrets.N8N_BASIC_AUTH_USER }}#g" \
-                      -e "s#__PWD__#${{ secrets.N8N_BASIC_AUTH_PASSWORD }}#g" \
-                      -e "s#__KEY__#${{ secrets.N8N_ENCRYPTION_KEY }}#g"
+            --project="${{ env.PROJECT_ID }}" \
+            --zone="${{ env.ZONE }}" \
+            --command "N8N_BASIC_AUTH_USER='${N8N_BASIC_AUTH_USER}' N8N_BASIC_AUTH_PASSWORD='${N8N_BASIC_AUTH_PASSWORD}' N8N_ENCRYPTION_KEY='${N8N_ENCRYPTION_KEY}' bash /tmp/deploy_remote.sh '${IMAGE}'"
