@@ -86,11 +86,43 @@ jobs:
           docker push "$IMAGE:latest"
 
   deploy-gce:
-    needs: build-test-push
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
+      needs: build-test-push
+      runs-on: ubuntu-latest
+      permissions:
+        id-token: write
+        contents: read
+    
+      env:
+        PROJECT_ID: n8n-ads-spend
+        ZONE: us-central1-a
+        LOCATION: us
+        REPO: n8n-repo
+        IMAGE_NAME: n8n
+    
+      steps:
+        - uses: actions/checkout@v4
+    
+        # Auth OIDC 
+        - id: auth
+          uses: google-github-actions/auth@v2
+          with:
+             workload_identity_provider: "projects/237577500123/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+             service_account: "github-test@n8n-ads-spend.iam.gserviceaccount.com"
+    
+        - name: Setup gcloud
+          uses: google-github-actions/setup-gcloud@v2
+    
+        # - run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev --quiet
+    
+        - name: Deploy (single SSH with heredoc)
+              run: |
+                set -euo pipefail
+                PROJECT_ID="n8n-ads-spend"
+                ZONE="us-central1-a"
+                LOCATION="us"
+                REPO="n8n-repo"
+                IMAGE_NAME="n8n"
+                IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
   
     env:
       PROJECT_ID: n8n-ads-spend
