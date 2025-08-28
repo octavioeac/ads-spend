@@ -8,7 +8,7 @@ on:
       - ".github/workflows/cicd.yml"
 
 env:
-  LOCATION: us
+  LOCATION: us           # "us" if your Artifact Registry is multi-region (us-docker.pkg.dev)
   REPO: n8n-repo
   IMAGE_NAME: n8n
 
@@ -18,24 +18,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Auth to GCP
+      - name: Authenticate to GCP
         id: auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # Usa el project_id que expone la acción de auth
       - name: Set PROJECT_ID
         run: echo "PROJECT_ID=${{ steps.auth.outputs.project_id }}" >> $GITHUB_ENV
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev -q
 
-      - name: Build image
+      - name: Build Docker image
         run: |
           IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
           TAG="${GITHUB_SHA::8}"
-          # Si tu Dockerfile está en docker/Dockerfile, usa -f:
+          # adjust the -f path if your Dockerfile is in a different folder
           docker build -f docker/Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
 
       - name: Test container (healthcheck)
@@ -49,12 +48,13 @@ jobs:
             -e N8N_BASIC_AUTH_USER=test \
             -e N8N_BASIC_AUTH_PASSWORD=test123 \
             "$IMAGE:$TAG"
+          echo "⏳ Waiting for n8n to start..."
           sleep 20
           curl -fsS http://localhost:5678/healthz
-          docker logs n8n-test --tail=120 || true
+          docker logs n8n-test --tail=60 || true
           docker rm -f n8n-test
 
-      - name: Push image
+      - name: Push image to Artifact Registry
         run: |
           IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
           TAG="${GITHUB_SHA::8}"
@@ -65,7 +65,7 @@ jobs:
     needs: build-test-push
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH to GCE VM
+      - name: Deploy to GCE VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.GCE_VM_IP }}
@@ -75,7 +75,7 @@ jobs:
           script: |
             set -e
 
-            # Instala gcloud si no está
+            echo "Ensuring gcloud is installed..."
             if ! command -v gcloud >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y curl apt-transport-https ca-certificates gnupg
@@ -84,44 +84,39 @@ jobs:
               sudo apt-get update && sudo apt-get install -y google-cloud-sdk
             fi
 
-            # Instala Docker si no está
+            echo "Ensuring Docker is installed..."
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update && sudo apt-get install -y docker.io
               sudo systemctl enable --now docker
             fi
 
-            # Login Docker→Artifact Registry
+            echo "Configuring Docker to use Artifact Registry..."
             gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev -q || true
 
-            # PROJECT_ID desde metadata (si la VM es GCE) o secreto de respaldo
+            echo "Resolving PROJECT_ID..."
             PROJECT_ID=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id || true)
             if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
               PROJECT_ID="${{ secrets.GCP_PROJECT_ID }}"
             fi
             if [ -z "$PROJECT_ID" ]; then
-              echo "PROJECT_ID no detectado. Define secreto GCP_PROJECT_ID."
+              echo "PROJECT_ID not detected. Please set secret GCP_PROJECT_ID."
               exit 1
             fi
 
             IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest"
 
-            # .env persistente — heredoc quoteado para no expandir nada
+            echo "📦 Preparing environment file..."
             sudo mkdir -p /data/n8n
             if [ ! -f /data/n8n/.env ]; then
-              sudo bash -lc "cat > /data/n8n/.env <<'ENVVARS'
-N8N_BASIC_AUTH_ACTIVE=true
-N8N_BASIC_AUTH_USER=\${N8N_USER}
-N8N_BASIC_AUTH_PASSWORD=\${N8N_PASS}
-N8N_ENCRYPTION_KEY=\${N8N_KEY}
-N8N_HOST=\$(curl -s ifconfig.me || echo localhost)
-N8N_PROTOCOL=http
-ENVVARS"
-              sudo sed -i "s|\${N8N_USER}|${{ secrets.N8N_BASIC_AUTH_USER }}|g" /data/n8n/.env
-              sudo sed -i "s|\${N8N_PASS}|${{ secrets.N8N_BASIC_AUTH_PASSWORD }}|g" /data/n8n/.env
-              sudo sed -i "s|\${N8N_KEY}|${{ secrets.N8N_ENCRYPTION_KEY }}|g" /data/n8n/.env
+              echo "N8N_BASIC_AUTH_ACTIVE=true" | sudo tee /data/n8n/.env
+              echo "N8N_BASIC_AUTH_USER=${{ secrets.N8N_BASIC_AUTH_USER }}"         | sudo tee -a /data/n8n/.env
+              echo "N8N_BASIC_AUTH_PASSWORD=${{ secrets.N8N_BASIC_AUTH_PASSWORD }}" | sudo tee -a /data/n8n/.env
+              echo "N8N_ENCRYPTION_KEY=${{ secrets.N8N_ENCRYPTION_KEY }}"           | sudo tee -a /data/n8n/.env
+              echo "N8N_HOST=$(curl -s ifconfig.me || echo localhost)"              | sudo tee -a /data/n8n/.env
+              echo "N8N_PROTOCOL=http"                                             | sudo tee -a /data/n8n/.env
             fi
 
-            # Pull & restart
+            echo "eploying latest container..."
             sudo docker pull "$IMAGE"
             sudo docker rm -f n8n || true
             sudo docker run -d --name n8n -p 80:5678 \
@@ -130,6 +125,6 @@ ENVVARS"
               -v /data/n8n:/home/node/.n8n \
               "$IMAGE"
 
-            # Verifica
+            echo "Deployment done. Checking logs..."
             sleep 10
             sudo docker logs n8n --tail=80 || true
