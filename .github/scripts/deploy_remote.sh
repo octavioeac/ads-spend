@@ -41,6 +41,8 @@ sudo mkdir -p /data/n8n
   echo "N8N_HOST=$(curl -s ifconfig.me || echo localhost)"
   echo "N8N_PROTOCOL=http"
   echo "N8N_SECURE_COOKIE=false" 
+  echo "DB_SQLITE_POOL_SIZE=5"
+  echo "N8N_RUNNERS_ENABLED=true"
 } | sudo tee /data/n8n/.env >/dev/null
 
 echo "== Step 3/5: Diagnostics (VM Service Account & scopes) =="
