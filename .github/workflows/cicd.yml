@@ -8,7 +8,7 @@ on:
       - ".github/workflows/cicd.yml"
 
 env:
-  LOCATION: us          
+  LOCATION: us
   REPO: n8n-repo
   IMAGE_NAME: n8n
 
@@ -23,6 +23,11 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ steps.auth.outputs.project_id }}
 
       - name: Set PROJECT_ID
         run: echo "PROJECT_ID=${{ steps.auth.outputs.project_id }}" >> $GITHUB_ENV
@@ -53,16 +58,14 @@ jobs:
             "$IMAGE:$TAG"
 
           echo "Waiting for n8n /healthz ..."
-          # Up to ~90s total (18 tries * 5s)
           for i in $(seq 1 18); do
             if curl -fsS http://localhost:5678/healthz >/dev/null 2>&1; then
-              echo "*****  ***  n8n is healthy *** *** *** ***"
+              echo "*** n8n is healthy ***"
               ok=1
               break
             fi
             echo "… not ready yet (${i}), sleeping 5s"
             sleep 5
-            # Print last lines to help with debugging while waiting
             docker ps -a || true
             docker logs --tail=50 n8n-test || true
           done
@@ -74,9 +77,7 @@ jobs:
             exit 7
           fi
 
-          # Clean up
           docker rm -f n8n-test
-
 
       - name: Push image to Artifact Registry
         run: |
@@ -114,6 +115,47 @@ jobs:
           install_components: beta
           project_id: ${{ env.PROJECT_ID }}
 
+      # 🔐 Ensure firewall rule (tcp/80) exists and tag is applied to VM
+      - name: Ensure firewall rule (tcp/80) and tag on VM
+        env:
+          TAG_HTTP: n8n-http
+        run: |
+          set -euo pipefail
+
+          # 1) Create firewall rule allow-n8n-http if it does not exist
+          if ! gcloud compute firewall-rules describe allow-n8n-http \
+               --project="${{ env.PROJECT_ID }}" >/dev/null 2>&1; then
+            gcloud compute firewall-rules create allow-n8n-http \
+              --project="${{ env.PROJECT_ID }}" \
+              --allow=tcp:80 \
+              --direction=INGRESS \
+              --priority=1000 \
+              --target-tags="${TAG_HTTP}" \
+              --network=default
+          else
+            echo "Firewall rule allow-n8n-http already exists."
+          fi
+
+          # 2) Add tag n8n-http to VM if missing
+          CURRENT_TAGS=$(gcloud compute instances describe n8n-vm \
+            --project="${{ env.PROJECT_ID }}" \
+            --zone="${{ env.ZONE }}" \
+            --format="get(tags.items)" | tr ';' ',' | tr -d '[]')
+
+          if echo "${CURRENT_TAGS}" | grep -qw "${TAG_HTTP}"; then
+            echo "VM already has the ${TAG_HTTP} tag."
+          else
+            if [ -n "${CURRENT_TAGS}" ]; then
+              NEW_TAGS="${CURRENT_TAGS},${TAG_HTTP}"
+            else
+              NEW_TAGS="${TAG_HTTP}"
+            fi
+            gcloud compute instances add-tags n8n-vm \
+              --project="${{ env.PROJECT_ID }}" \
+              --zone="${{ env.ZONE }}" \
+              --tags="${NEW_TAGS}"
+          fi
+
       - name: Build image ref for deploy
         id: img
         run: echo "IMAGE=${{ env.LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
@@ -125,17 +167,39 @@ jobs:
           set -euo pipefail
           IMAGE="$1"
 
-          # Docker
+          export DEBIAN_FRONTEND=noninteractive
+          export NEEDRESTART_MODE=a
+
+          # Install Docker avoiding man-db / needrestart hangs
           if ! command -v docker >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo apt-get install -y docker.io
-            sudo systemctl enable --now docker
+            sudo apt-get update -y -o Dpkg::Use-Pty=0
+
+            # Optionally skip manpages for faster installs
+            echo 'path-exclude=/usr/share/man/*' | sudo tee /etc/dpkg/dpkg.cfg.d/99skip-manpages >/dev/null || true
+
+            # Divert mandb to /bin/true to prevent hanging
+            if [ -x /usr/bin/mandb ]; then
+              sudo dpkg-divert --local --rename --add /usr/bin/mandb || true
+              sudo ln -sf /bin/true /usr/bin/mandb || true
+            fi
+
+            sudo apt-get install -y -o Dpkg::Use-Pty=0 --no-install-recommends docker.io
+            sudo systemctl enable --now docker || true
+
+            # Restore mandb
+            if [ -L /usr/bin/mandb ]; then
+              sudo rm -f /usr/bin/mandb || true
+              sudo dpkg-divert --local --rename --remove /usr/bin/mandb || true
+            fi
+
+            # Ensure dpkg is clean
+            sudo dpkg --configure -a || true
           fi
 
-          # Artifact Registry helper (no rompe si ya está)
+          # Artifact Registry auth
           gcloud auth configure-docker us-docker.pkg.dev --quiet || true
 
-          # Env
+          # Environment variables for n8n
           sudo mkdir -p /data/n8n
           {
             echo "N8N_BASIC_AUTH_ACTIVE=true"
@@ -146,7 +210,7 @@ jobs:
             echo "N8N_PROTOCOL=http"
           } | sudo tee /data/n8n/.env >/dev/null
 
-          # Deploy
+          # Deploy container
           sudo docker pull "${IMAGE}"
           sudo docker rm -f n8n || true
           sudo docker run -d --name n8n -p 80:5678 \
@@ -162,10 +226,9 @@ jobs:
 
       - name: Copy script to VM (beta scp)
         run: |
-          gcloud beta compute scp \
+          gcloud beta compute scp ./deploy_remote.sh n8n-vm:/tmp/deploy_remote.sh \
             --project="${{ env.PROJECT_ID }}" \
-            --zone="${{ env.ZONE }}" \
-            ./deploy_remote.sh n8n-vm:/tmp/deploy_remote.sh
+            --zone="${{ env.ZONE }}"
 
       - name: Run remote deploy (beta ssh)
         env:
