@@ -40,7 +40,11 @@ sudo mkdir -p /data/n8n
   echo "N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}"
   echo "N8N_HOST=$(curl -s ifconfig.me || echo localhost)"
   echo "N8N_PROTOCOL=http"
+<<<<<<< Updated upstream
   echo "N8N_SECURE_COOKIE=false" 
+=======
+  echo "N8N_SECURE_COOKIE=false"
+>>>>>>> Stashed changes
   echo "DB_SQLITE_POOL_SIZE=5"
   echo "N8N_RUNNERS_ENABLED=true"
 } | sudo tee /data/n8n/.env >/dev/null
