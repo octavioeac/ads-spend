@@ -3,9 +3,6 @@ name: Cloud Run – deploy from image
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - "api/**"
-      - ".github/workflows/deploy-from-image.yml"
 
 env:
   GCP_PROJECT_ID: n8n-ads-spend
@@ -18,17 +15,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # para WIF
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
 
-      # Auth (WIF o JSON)
-      - uses: google-github-actions/auth@v2
+      # AUTH (exactly one)
+      - name: Auth to Google Cloud (WIF)
+        id: auth-wif
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
+        uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          # o: credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Auth to Google Cloud (SA JSON)
+        id: auth-json
+        if: ${{ secrets.GCP_WIF_PROVIDER == '' && secrets.GCP_SERVICE_ACCOUNT == '' && secrets.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Validate auth configuration
+        if: ${{ !( (secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '') || (secrets.GCP_WIF_PROVIDER == '' && secrets.GCP_SERVICE_ACCOUNT == '' && secrets.GCP_SA_KEY != '') ) }}
+        run: |
+          echo "::error::You must configure exactly ONE auth method."
+          exit 1
 
       - uses: google-github-actions/setup-gcloud@v2
         with:
