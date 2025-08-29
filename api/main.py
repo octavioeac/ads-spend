@@ -139,7 +139,8 @@ def bq_exists():
 @app.get("/metrics/cac-roas")
 def metrics_cac_roas():
     """
-    Returns CAC and ROAS for the last 30 days vs the previous 30 days (absolute values + % deltas).
+    Returns CAC and ROAS for last 30 days vs previous 30 days.
+    Always returns both periods even if one has no data.
     """
     sql = f"""
     WITH base AS (
@@ -150,34 +151,36 @@ def metrics_cac_roas():
     ),
     agg AS (
       SELECT
-        CASE WHEN dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN "last_30" ELSE "prev_30" END AS period,
+        CASE WHEN dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN 'last_30' ELSE 'prev_30' END AS period,
         SUM(spend) AS spend,
         SUM(conv)  AS conv
       FROM base
       GROUP BY period
+    ),
+    periods AS (
+      SELECT 'last_30' AS period UNION ALL SELECT 'prev_30'
     )
     SELECT
-      period,
-      spend,
-      conv,
-      ROUND(spend / NULLIF(conv,0), 2) AS CAC,
-      ROUND((conv * 100) / NULLIF(spend,0), 2) AS ROAS
-    FROM agg
+      periods.period,
+      IFNULL(agg.spend, 0) AS spend,
+      IFNULL(agg.conv, 0)  AS conv,
+      ROUND(IFNULL(agg.spend, 0) / NULLIF(agg.conv, 0), 2) AS CAC,
+      ROUND((IFNULL(agg.conv, 0) * 100) / NULLIF(agg.spend, 0), 2) AS ROAS
+    FROM periods
+    LEFT JOIN agg USING (period)
     """
     result = run_bq_query(sql)
 
     rows = result.get("rows", [])
-    if not rows:
-        return {"message": "No data for the last 60 days.", "last_30": {}, "prev_30": {}, "delta": {}}
-
+    # Build dict keyed by period
     metrics = {}
     for row in rows:
         vals = {f["name"]: f["v"] for f in row["f"]}
-        # Defensive casts (BQ returns strings)
         spend = float(vals["spend"]) if vals["spend"] is not None else 0.0
         conv  = float(vals["conv"]) if vals["conv"] is not None else 0.0
-        cac   = float(vals["CAC"]) if vals["CAC"] is not None else None
-        roas  = float(vals["ROAS"]) if vals["ROAS"] is not None else None
+        cac   = float(vals["CAC"])  if vals["CAC"]  not in (None, "null") else None
+        roas  = float(vals["ROAS"]) if vals["ROAS"] not in (None, "null") else None
+
         metrics[vals["period"]] = {
             "spend": spend,
             "conversions": int(conv),
@@ -185,18 +188,20 @@ def metrics_cac_roas():
             "ROAS": roas,
         }
 
+    # Ensure both keys exist even if BQ returned only one row (extra safety)
+    for p in ("last_30", "prev_30"):
+        metrics.setdefault(p, {"spend": 0.0, "conversions": 0, "CAC": None, "ROAS": None})
+
+    # Deltas (%): handle None/0 safely
     def pct_delta(new, old):
         return round(((new - old) / old) * 100, 2) if (old not in (None, 0)) and (new is not None) else None
 
-    if "last_30" in metrics and "prev_30" in metrics:
-        metrics["delta"] = {
-            "CAC": pct_delta(metrics["last_30"]["CAC"], metrics["prev_30"]["CAC"]),
-            "ROAS": pct_delta(metrics["last_30"]["ROAS"], metrics["prev_30"]["ROAS"]),
-            "spend": pct_delta(metrics["last_30"]["spend"], metrics["prev_30"]["spend"]),
-            "conversions": pct_delta(metrics["last_30"]["conversions"], metrics["prev_30"]["conversions"]),
-        }
-    else:
-        metrics["delta"] = {}
+    metrics["delta"] = {
+        "CAC":         pct_delta(metrics["last_30"]["CAC"],  metrics["prev_30"]["CAC"]),
+        "ROAS":        pct_delta(metrics["last_30"]["ROAS"], metrics["prev_30"]["ROAS"]),
+        "spend":       pct_delta(metrics["last_30"]["spend"], metrics["prev_30"]["spend"]),
+        "conversions": pct_delta(metrics["last_30"]["conversions"], metrics["prev_30"]["conversions"]),
+    }
 
     return metrics
 
