@@ -198,8 +198,8 @@ for SA in "${DEPLOY_SA}" "${CB_RUNTIME_SA}"; do
   gsutil iam ch "serviceAccount:${SA}:roles/storage.legacyBucketWriter" "gs://${CLOUDBUILD_BUCKET}"
 done
 # (Broader, simpler alternative per bucket):
-# gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
-# gsutil iam ch "serviceAccount:${CB_RUNTIME_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
+ gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
+ gsutil iam ch "serviceAccount:${CB_RUNTIME_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
 
 # ----------------------------
 # Secret Manager (optional API_KEY secret)
