@@ -1,0 +1,93 @@
+name: Deploy Cloud Run - metrics-api
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "api/**"
+      - ".github/workflows/deploy-cloudrun.yml"
+
+env:
+  GCP_REGION: us-central1
+  GCP_PROJECT_ID: n8n-ads-spend
+  ARTIFACT_REPO: n8n-repo
+  SERVICE_NAME: metrics-api
+  BQ_DATASET: ads_warehouse
+  BQ_TABLE: ads_spend_raw
+  RUNTIME_SA_EMAIL: cr-metrics@n8n-ads-spend.iam.gserviceaccount.com
+  SECRET_NAME: metrics-api-key
+
+concurrency:
+  group: cloud-run-deploy
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for WIF
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --- AUTHENTICATION ---
+      #
+      # Option A) Workload Identity Federation (recommended)
+      # Requires in repo secrets:
+      #   - GCP_WIF_PROVIDER  (e.g., projects/2375.../locations/global/workloadIdentityPools/github-pool/providers/github-provider)
+      #   - GCP_SERVICE_ACCOUNT (e.g., github-test@n8n-ads-spend.iam.gserviceaccount.com)
+      - name: Authenticate to Google Cloud (WIF)
+        if: ${{ secrets.GCP_WIF_PROVIDER && secrets.GCP_SERVICE_ACCOUNT }}
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # Option B) Service Account JSON (only if WIF is not used)
+      # Requires in repo secrets:
+      #   - GCP_SA_KEY (full JSON key content)
+      - name: Authenticate to Google Cloud (SA JSON)
+        if: ${{ !secrets.GCP_WIF_PROVIDER }}
+        id: auth-json
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev -q
+
+      # --- BUILD ---
+      - name: Build & Push image (Cloud Build)
+        working-directory: cloudrun-metrics
+        run: |
+          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE_NAME }}:$(git rev-parse --short HEAD)"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          gcloud builds submit --tag "$IMAGE_URI" .
+
+      # --- DEPLOY ---
+      - name: Deploy to Cloud Run (public)
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image "${IMAGE_URI}" \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --service-account ${{ env.RUNTIME_SA_EMAIL }} \
+            --allow-unauthenticated \
+            --set-env-vars PROJECT_ID=${{ env.GCP_PROJECT_ID }},BQ_DATASET=${{ env.BQ_DATASET }},BQ_TABLE=${{ env.BQ_TABLE }} \
+            --set-secrets API_KEY=${{ env.SECRET_NAME }}:latest
+
+      - name: Output Service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.GCP_REGION }} --format='value(status.url)')
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "Service URL: $URL" >> $GITHUB_STEP_SUMMARY
+          echo "curl -H 'x-api-key: <YOUR_API_KEY>' '${URL}/metrics'" >> $GITHUB_STEP_SUMMARY
