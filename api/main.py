@@ -171,28 +171,48 @@ def metrics_cac_roas():
     """
     result = run_bq_query(sql)
 
-    rows = result.get("rows", [])
-    # Build dict keyed by period
-    metrics = {}
-    for row in rows:
-        vals = {f["name"]: f["v"] for f in row["f"]}
-        spend = float(vals["spend"]) if vals["spend"] is not None else 0.0
-        conv  = float(vals["conv"]) if vals["conv"] is not None else 0.0
-        cac   = float(vals["CAC"])  if vals["CAC"]  not in (None, "null") else None
-        roas  = float(vals["ROAS"]) if vals["ROAS"] not in (None, "null") else None
+    # ---- Normaliza el resultado a una lista de dicts [{period, spend, conv, CAC, ROAS}, ...] ----
+    def _to_float(x):
+        if x in (None, "null", ""):
+            return None
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
 
-        metrics[vals["period"]] = {
+    if isinstance(result, list):
+        normalized = result  # ya viene listo (lista plana)
+    else:
+        normalized = []
+        rows = result.get("rows", []) or []
+        fields = [f["name"] for f in result.get("schema", {}).get("fields", [])] or []
+        for r in rows:
+            obj = {fields[i]: r["f"][i]["v"] if i < len(r["f"]) else None for i in range(len(fields))}
+            normalized.append(obj)
+
+    # ---- Construye el dict por periodo ----
+    metrics = {}
+    for obj in normalized:
+        period = obj.get("period")
+        if not period:
+            continue
+        spend = _to_float(obj.get("spend")) or 0.0
+        conv  = _to_float(obj.get("conv"))  or 0.0
+        cac   = _to_float(obj.get("CAC"))
+        roas  = _to_float(obj.get("ROAS"))
+
+        metrics[period] = {
             "spend": spend,
             "conversions": int(conv),
             "CAC": cac,
             "ROAS": roas,
         }
 
-    # Ensure both keys exist even if BQ returned only one row (extra safety)
+    # Asegura ambas llaves aunque falte un periodo
     for p in ("last_30", "prev_30"):
         metrics.setdefault(p, {"spend": 0.0, "conversions": 0, "CAC": None, "ROAS": None})
 
-    # Deltas (%): handle None/0 safely
+    # Deltas (%): maneja None/0 seguro
     def pct_delta(new, old):
         return round(((new - old) / old) * 100, 2) if (old not in (None, 0)) and (new is not None) else None
 
