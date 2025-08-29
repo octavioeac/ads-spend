@@ -247,10 +247,45 @@ echo "  as_deploy_sa builds submit --tag \"${REGION}-docker.pkg.dev/${PROJECT_ID
 # ----------------------------
 # Quick debug (optional)
 # ----------------------------
+
+# ----------------------------
+# Cloud Build Runtime Service Account (PROJECT_NUMBER@cloudbuild.gserviceaccount.com)
+# ----------------------------
+log "Granting roles to Cloud Build runtime SA: ${CB_RUNTIME_SA}"
+
+# Core Cloud Build permissions
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${CB_RUNTIME_SA}" \
+  --role="roles/cloudbuild.builds.builder"
+
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${CB_RUNTIME_SA}" \
+  --role="roles/cloudbuild.builds.editor"
+
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${CB_RUNTIME_SA}" \
+  --role="roles/cloudbuild.builds.viewer"
+
+# Allow runtime SA to impersonate other SAs (needed for deploys)
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${CB_RUNTIME_SA}" \
+  --role="roles/iam.serviceAccountUser"
+
+# Allow deploys to Cloud Run
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${CB_RUNTIME_SA}" \
+  --role="roles/run.admin"
+
+log "Cloud Build runtime SA configured: ${CB_RUNTIME_SA}"
+
+
+
 log "Quick debug"
 gcloud auth list
 gcloud config list
 gsutil iam get "gs://${CLOUDBUILD_BUCKET}" | head -n 60 || true
+
+
 
 # ----------------------------
 # Summary
