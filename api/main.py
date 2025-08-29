@@ -6,6 +6,6 @@ app = FastAPI(title="metrics-api")
 def root():
     return {"ok": True, "service": "metrics-api"}
 
-@app.get("/healthz")
+@app.get("healthz")
 def healthz():
     return {"status": "ok"}
