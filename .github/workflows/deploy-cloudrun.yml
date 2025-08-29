@@ -1,100 +1,50 @@
-name: CI/CD Cloud Run - metrics-api
+name: CI/CD n8n
 
 on:
   push:
     branches: ["main"]
-    paths:
-      - "api/**"
-      - ".github/workflows/deploy-cloudrun.yml"
 
-concurrency:
-  group: cloud-run-deploy
-  cancel-in-progress: true
+env:
+  REGION: us-central1
+  PROJECT_ID: n8n-ads-spend
+  REPO: n8n-repo
+  SERVICE: metrics-api
+  IMAGE_NAME: n8n
 
 jobs:
-  build-and-deploy:
+  build-deploy:
     runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: read
-      id-token: write   
-
-    env:
-      GCP_PROJECT_ID: n8n-ads-spend
-      REGION: us-central1
-      REPO: n8n-repo
-      SERVICE: metrics-api
-      IMAGE_NAME: metrics-api
 
     steps:
       - uses: actions/checkout@v4
 
-      # --- AUTH
-      - name: Decide auth method (WIF vs JSON)
-        id: decide
-        env:
-          WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
-          WIF_SA: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-        run: |
-          if [ -n "${WIF_PROVIDER}" ] && [ -n "${WIF_SA}" ]; then
-            echo "HAS_WIF=true" >> "$GITHUB_ENV"
-          else
-            echo "HAS_WIF=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Auth to Google Cloud (WIF)
-        if: ${{ env.HAS_WIF == 'true' }}
+      - name: Authenticate to GCP
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Auth to Google Cloud (SA JSON)
-        if: ${{ env.HAS_WIF != 'true' }}
-        id: auth-json
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-test@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev -q
 
-      # --- BUILD ---
-      - name: Build image ref
-        id: img
+      - name: Build and Push Docker image
         run: |
-          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:$(git rev-parse --short HEAD)"
-          echo "IMAGE=$IMAGE" >> $GITHUB_OUTPUT
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
+          TAG="${GITHUB_SHA::8}"
+          docker build -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+          echo "IMAGE_URI=$IMAGE:$TAG" >> $GITHUB_ENV
 
-      - name: Build & Push (Cloud Build)
-        working-directory: api
-        run: gcloud builds submit --tag "$IMAGE" .
-
-      # --- DEPLOY ---
-      - name: Deploy to Cloud Run (public)
+      - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE }} \
-            --image "$IMAGE" \
+            --image "$IMAGE_URI" \
             --region ${{ env.REGION }} \
             --platform managed \
-            --service-account cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --allow-unauthenticated \
-            --set-env-vars "PROJECT_ID=${{ env.GCP_PROJECT_ID }},BQ_DATASET=ads_warehouse,BQ_TABLE=ads_spend_raw,LOCATION=${{ env.REGION }},REPO=${{ env.REPO }},SERVICE=${{ env.SERVICE }},RUNTIME_SA_EMAIL=cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
-            --set-secrets "API_KEY=metrics-api-key:latest"
-
-      # --- OUTPUT URL ---
-      - name: Output Service URL
-        id: url
-        run: |
-          URL=$(gcloud run services describe ${{ env.SERVICE }} \
-            --region ${{ env.REGION }} \
-            --format='value(status.url)')
-          echo "URL=$URL" >> $GITHUB_ENV
-          echo "Service URL: $URL" >> $GITHUB_STEP_SUMMARY
-          echo "curl -H 'x-api-key: <YOUR_API_KEY>' '${URL}/metrics'" >> $GITHUB_STEP_SUMMARY
+            --service-account cr-metrics@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-env-vars PROJECT_ID=${{ env.PROJECT_ID }},BQ_DATASET=ads_warehouse,BQ_TABLE=ads_spend_raw
