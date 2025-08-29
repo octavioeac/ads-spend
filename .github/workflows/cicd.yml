@@ -1,25 +1,47 @@
-name: CI/CD n8n
+name: CI/CD Cloud Run - metrics-api
 
 on:
   push:
     branches: ["main"]
     paths:
-      - "docker/**"
-      - ".github/workflows/cicd.yml"
+      - "api/**"
+      - ".github/workflows/deploy-cloudrun.yml"
 
-env:
-  LOCATION: us
-  REPO: n8n-repo
-  IMAGE_NAME: n8n
+concurrency:
+  group: cloud-run-deploy
+  cancel-in-progress: true
 
 jobs:
-  build-test-push:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # necesario para WIF
+
+    env:
+      GCP_PROJECT_ID: n8n-ads-spend
+      REGION: us-central1
+      REPO: n8n-repo
+      SERVICE: metrics-api
+      IMAGE_NAME: metrics-api
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
+      # --- AUTH ---
+      # Opción A: Workload Identity Federation (recomendada)
+      - name: Auth to Google Cloud (WIF)
+        if: ${{ secrets.GCP_WIF_PROVIDER && secrets.GCP_SERVICE_ACCOUNT }}
         id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # Opción B: Service Account JSON (fallback)
+      - name: Auth to Google Cloud (SA JSON)
+        if: ${{ !secrets.GCP_WIF_PROVIDER }}
+        id: auth-json
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -27,196 +49,47 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ steps.auth.outputs.project_id }}
-
-      - name: Set PROJECT_ID
-        run: echo "PROJECT_ID=${{ steps.auth.outputs.project_id }}" >> $GITHUB_ENV
+          project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev -q
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev -q
 
-      - name: Build Docker image
-        run: |
-          IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
-          TAG="${GITHUB_SHA::8}"
-          docker build \
-            -f docker/Dockerfile \
-            --build-arg N8N_VERSION=1.108.2 \
-            -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
-
-      - name: Test container (wait for health)
-        run: |
-          IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
-          TAG="${GITHUB_SHA::8}"
-
-          docker run -d --name n8n-test -p 5678:5678 \
-            -e N8N_HOST=localhost \
-            -e N8N_PROTOCOL=http \
-            -e N8N_BASIC_AUTH_ACTIVE=true \
-            -e N8N_BASIC_AUTH_USER=test \
-            -e N8N_BASIC_AUTH_PASSWORD=test123 \
-            "$IMAGE:$TAG"
-
-          echo "Waiting for n8n /healthz ..."
-          for i in $(seq 1 18); do
-            if curl -fsS http://localhost:5678/healthz >/dev/null 2>&1; then
-              echo "*** n8n is healthy ***"
-              ok=1
-              break
-            fi
-            echo "… not ready yet (${i}), sleeping 5s"
-            sleep 5
-            docker ps -a || true
-            docker logs --tail=50 n8n-test || true
-          done
-
-          if [ "${ok:-0}" != "1" ]; then
-            echo "n8n did not become healthy in time"
-            docker ps -a || true
-            docker logs n8n-test || true
-            exit 7
-          fi
-
-          docker rm -f n8n-test
-
-      - name: Push image to Artifact Registry
-        run: |
-          IMAGE="${{ env.LOCATION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
-          TAG="${GITHUB_SHA::8}"
-          docker push "$IMAGE:$TAG"
-          docker push "$IMAGE:latest"
-
-  deploy-gce:
-    needs: build-test-push
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-
-    env:
-      PROJECT_ID: n8n-ads-spend
-      ZONE: us-central1-a
-      LOCATION: us
-      REPO: n8n-repo
-      IMAGE_NAME: n8n
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/237577500123/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "github-test@n8n-ads-spend.iam.gserviceaccount.com"
-
-      - name: Setup gcloud (with beta)
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          install_components: beta
-          project_id: ${{ env.PROJECT_ID }}
-      - name: Ensure VM has Artifact Registry access
-        env:
-          PROJECT_ID: ${{ env.PROJECT_ID }}
-          ZONE: ${{ env.ZONE }}
-          VM_NAME: n8n-vm
-        run: |
-          set -euo pipefail
-
-          echo "==> Detecting VM service account and scopes"
-          INFO=$(gcloud compute instances describe "${VM_NAME}" \
-            --project "${PROJECT_ID}" --zone "${ZONE}" \
-            --format='value(serviceAccounts[0].email,serviceAccounts[0].scopes)')
-          VM_SA_EMAIL="$(echo "${INFO}" | awk '{print $1}')"
-          VM_SCOPES="$(echo "${INFO}" | cut -d' ' -f2- || true)"
-
-          echo "VM Service Account: ${VM_SA_EMAIL}"
-          echo "VM Scopes: ${VM_SCOPES:-<none reported>}"
-
-          echo "==> Granting Artifact Registry Reader to the VM's SA (project-level)"
-          gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-            --member="serviceAccount:${VM_SA_EMAIL}" \
-            --role="roles/artifactregistry.reader" \
-            --quiet
-
-          echo "==> Checking for cloud-platform scope (recommended)"
-          if echo "${VM_SCOPES}" | grep -q "https://www.googleapis.com/auth/cloud-platform"; then
-            echo "cloud-platform scope present."
-          else
-            echo "::warning ::cloud-platform scope NOT present on VM ${VM_NAME}."
-            echo "          Pulls can still work via 'gcloud auth configure-docker' + metadata token,"
-            echo "          but for fewer surprises consider updating scopes (requires VM restart):"
-            echo "gcloud compute instances set-service-account ${VM_NAME} \\"
-            echo "  --project ${PROJECT_ID} --zone ${ZONE} \\"
-            echo "  --service-account ${VM_SA_EMAIL} \\"
-            echo "  --scopes=https://www.googleapis.com/auth/cloud-platform"
-          fi
-    
-      # Ensure firewall rule (tcp/80) exists and tag is applied to VM
-      - name: Ensure firewall rule (tcp/80) and tag on VM
-        env:
-          TAG_HTTP: n8n-http
-        run: |
-          set -euo pipefail
-
-          # 1) Create firewall rule allow-n8n-http if it does not exist
-          if ! gcloud compute firewall-rules describe allow-n8n-http \
-               --project="${{ env.PROJECT_ID }}" >/dev/null 2>&1; then
-            gcloud compute firewall-rules create allow-n8n-http \
-              --project="${{ env.PROJECT_ID }}" \
-              --allow=tcp:80 \
-              --direction=INGRESS \
-              --priority=1000 \
-              --target-tags="${TAG_HTTP}" \
-              --network=default
-          else
-            echo "Firewall rule allow-n8n-http already exists."
-          fi
-
-          # 2) Add tag n8n-http to VM if missing
-          CURRENT_TAGS=$(gcloud compute instances describe n8n-vm \
-            --project="${{ env.PROJECT_ID }}" \
-            --zone="${{ env.ZONE }}" \
-            --format="get(tags.items)" | tr ';' ',' | tr -d '[]')
-
-          if echo "${CURRENT_TAGS}" | grep -qw "${TAG_HTTP}"; then
-            echo "VM already has the ${TAG_HTTP} tag."
-          else
-            if [ -n "${CURRENT_TAGS}" ]; then
-              NEW_TAGS="${CURRENT_TAGS},${TAG_HTTP}"
-            else
-              NEW_TAGS="${TAG_HTTP}"
-            fi
-            gcloud compute instances add-tags n8n-vm \
-              --project="${{ env.PROJECT_ID }}" \
-              --zone="${{ env.ZONE }}" \
-              --tags="${NEW_TAGS}"
-          fi
-
-      - name: Build image ref for deploy
+      # --- BUILD ---
+      - name: Build image ref
         id: img
-        run: echo "IMAGE=${{ env.LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
-
-      - name: Copy deploy_remote.sh into workspace
-        run: cp .github/scripts/deploy_remote.sh ./deploy_remote.sh
-
-      - name: Make script executable
-        run: chmod +x ./deploy_remote.sh
-
-
-      - name: Copy script to VM (beta scp)
         run: |
-          gcloud beta compute scp ./deploy_remote.sh n8n-vm:/tmp/deploy_remote.sh \
-            --project="${{ env.PROJECT_ID }}" \
-            --zone="${{ env.ZONE }}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:$(git rev-parse --short HEAD)"
+          echo "IMAGE=$IMAGE" >> $GITHUB_OUTPUT
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      - name: Run remote deploy (beta ssh)
-        env:
-          IMAGE: ${{ steps.img.outputs.IMAGE }}
-          N8N_BASIC_AUTH_USER: ${{ secrets.N8N_BASIC_AUTH_USER }}
-          N8N_BASIC_AUTH_PASSWORD: ${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
-          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+      - name: Build & Push (Cloud Build)
+        working-directory: api
+        run: gcloud builds submit --tag "$IMAGE" .
+
+      # --- DEPLOY ---
+      - name: Deploy to Cloud Run (public)
         run: |
-          gcloud beta compute ssh n8n-vm \
-            --project="${{ env.PROJECT_ID }}" \
-            --zone="${{ env.ZONE }}" \
-            --command "N8N_BASIC_AUTH_USER='${N8N_BASIC_AUTH_USER}' N8N_BASIC_AUTH_PASSWORD='${N8N_BASIC_AUTH_PASSWORD}' N8N_ENCRYPTION_KEY='${N8N_ENCRYPTION_KEY}' bash /tmp/deploy_remote.sh '${IMAGE}'"
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image "$IMAGE" \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --service-account cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --allow-unauthenticated \
+            --set-env-vars \
+              PROJECT_ID=${{ env.GCP_PROJECT_ID }},\
+              BQ_DATASET=ads_warehouse,\
+              BQ_TABLE=ads_spend_raw,\
+              LOCATION=${{ env.REGION }},\
+              REPO=${{ env.REPO }},\
+              SERVICE=${{ env.SERVICE }},\
+              RUNTIME_SA_EMAIL=cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-secrets \
+              API_KEY=metrics-api-key:latest
+
+      - name: Output Service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE }} --region ${{ env.REGION }} --format='value(status.url)')
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "Service URL: $URL" >> $GITHUB_STEP_SUMMARY
+          echo "curl -H 'x-api-key: <YOUR_API_KEY>' '${URL}/metrics'" >> $GITHUB_STEP_SUMMARY
