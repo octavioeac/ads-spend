@@ -175,6 +175,72 @@ gcloud auth list
 gcloud config list
 gsutil iam get "gs://${CLOUDBUILD_BUCKET}" | head -n 40 || true
 
+# ----------------------------
+#  Cloud Build: staging bucket + permissions
+# ----------------------------
+log "Ensuring Cloud Build staging bucket and permissions"
+
+# Detect project number and derive identities
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+CB_RUNTIME_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"                        # Cloud Build runtime SA
+CB_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"  # Cloud Build service agent
+CLOUDBUILD_BUCKET="${PROJECT_ID}_cloudbuild"
+
+# (A) Enable Service Usage for the CI/CD caller (if using a pipeline SA)
+# If you run GitHub Actions with a dedicated SA, define DEPLOY_SA before this block, e.g.:
+#   DEPLOY_SA="github-test@${PROJECT_ID}.iam.gserviceaccount.com"
+if [[ -n "${DEPLOY_SA:-}" ]]; then
+  log "Granting Service Usage role to DEPLOY_SA: ${DEPLOY_SA}"
+  grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/serviceusage.serviceUsageConsumer"
+  # Optional (for strict org policies): roles/serviceusage.serviceUsageAdmin
+fi
+
+# (B) Ensure the Cloud Build service identity exists and has its role
+log "Ensuring Cloud Build service identity and role"
+gcloud beta services identity create \
+  --service=cloudbuild.googleapis.com \
+  --project="$PROJECT_ID" >/dev/null 2>&1 || true
+grant_project_role "serviceAccount:${CB_SERVICE_AGENT}" "roles/cloudbuild.serviceAgent"
+
+# (C) Create staging bucket if it does not exist
+log "Creating Cloud Build staging bucket if missing: gs://${CLOUDBUILD_BUCKET}"
+gsutil ls -p "$PROJECT_ID" "gs://${CLOUDBUILD_BUCKET}" >/dev/null 2>&1 || \
+  gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${CLOUDBUILD_BUCKET}"
+
+# (D) Grant bucket/object permissions to:
+#   - Cloud Build runtime SA (PROJECT_NUMBER@cloudbuild.gserviceaccount.com)
+#   - CI/CD SA performing the submit (DEPLOY_SA), if defined
+for SA in "$CB_RUNTIME_SA" "${DEPLOY_SA:-}"; do
+  [[ -z "$SA" ]] && continue
+  log "Granting bucket/object permissions on ${CLOUDBUILD_BUCKET} to ${SA}"
+  gsutil iam ch "serviceAccount:${SA}:roles/storage.objectAdmin"        "gs://${CLOUDBUILD_BUCKET}"
+  gsutil iam ch "serviceAccount:${SA}:roles/storage.legacyBucketReader" "gs://${CLOUDBUILD_BUCKET}"
+  gsutil iam ch "serviceAccount:${SA}:roles/storage.legacyBucketWriter" "gs://${CLOUDBUILD_BUCKET}"
+  # Simplified alternative (broader, at bucket scope):
+  # gsutil iam ch "serviceAccount:${SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
+done
+
+# (E) (Optional) Cloud Build submit role for the CI/CD caller
+if [[ -n "${DEPLOY_SA:-}" ]]; then
+  log "Granting Cloud Build submit role to DEPLOY_SA"
+  grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/cloudbuild.builds.editor"
+  # For least privilege, replace with: roles/cloudbuild.builds.submitter
+fi
+
+# Short debug
+log "Bucket IAM (first lines)"
+gsutil iam get "gs://${CLOUDBUILD_BUCKET}" | head -n 60 || true
+
+log "Cloud Build bucket ready. You can now run:"
+echo "  gcloud builds submit --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE} ./api"
+
+# If your organization restricts the default *_cloudbuild bucket, use a custom bucket instead:
+#   STAGING_BUCKET="${PROJECT_ID}-buildsrc"
+#   gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${STAGING_BUCKET}" || true
+#   gsutil iam ch "serviceAccount:${CB_RUNTIME_SA}:roles/storage.admin" "gs://${STAGING_BUCKET}"
+#   [[ -n "${DEPLOY_SA:-}" ]] && gsutil iam ch "serviceAccount:${DEPLO_]()]()
+
+
 echo
 echo "Setup finished with:"
 echo "  PROJECT_ID=${PROJECT_ID}"
