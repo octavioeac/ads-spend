@@ -31,6 +31,44 @@ grant_project_role() {
 }
 
 # ----------------------------
+# Auth guard (must run before any 'gcloud ... describe')
+# ----------------------------
+# NOTE: We set PROJECT_ID after this guard as well, but we need an account first.
+ACTIVE_ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
+if [[ -z "${ACTIVE_ACCOUNT}" ]]; then
+  echo "No active gcloud account detected."
+
+  # If running in CI and GOOGLE_APPLICATION_CREDENTIALS is set, activate it
+  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
+    echo "Found GOOGLE_APPLICATION_CREDENTIALS, activating service account…"
+    gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
+    ACTIVE_ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
+  fi
+
+  # Still no account? Show clear instructions and exit
+  if [[ -z "${ACTIVE_ACCOUNT}" ]]; then
+    cat <<'EOF'
+No gcloud account is active.
+
+Do ONE of the following and re-run this script:
+
+1) (Local/Cloud Shell) Login and set project:
+   gcloud auth login
+   gcloud config set project <PROJECT_ID>
+
+2) (CI) Use a service account key:
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa-key.json
+   gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+
+3) (Preferred for local tests) Impersonate the CI/CD service account:
+   export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT="github-test@n8n-ads-spend.iam.gserviceaccount.com"
+   gcloud config set project n8n-ads-spend
+EOF
+    exit 1
+  fi
+fi
+
+# ----------------------------
 # Interactive variables
 # ----------------------------
 
@@ -40,6 +78,8 @@ if [[ -z "${PROJECT_ID}" ]]; then
   read -rp "Enter your GCP Project ID: " PROJECT_ID
 fi
 echo "Using PROJECT_ID=${PROJECT_ID}"
+# Ensure the desired project is selected in this session
+gcloud config set project "${PROJECT_ID}" >/dev/null
 
 # 2) REGION → default
 DEFAULT_REGION="us-central1"
@@ -114,7 +154,7 @@ gcloud services enable \
 log "Granting roles to CI/CD Service Account: ${DEPLOY_SA}"
 
 grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/serviceusage.serviceUsageConsumer"
-grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/cloudbuild.builds.editor"
+grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/cloudbuild.builds.editor"     # or roles/cloudbuild.builds.submitter
 grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/artifactregistry.writer"
 grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/run.admin"
 grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/secretmanager.secretAccessor"
@@ -125,7 +165,7 @@ grant_project_role "serviceAccount:${DEPLOY_SA}" "roles/secretmanager.secretAcce
 log "Ensuring Cloud Build Service Agent exists and has its role"
 gcloud beta services identity create \
   --service=cloudbuild.googleapis.com \
-  --project="${PROJECT_ID}" || true
+  --project="${PROJECT_ID}" >/dev/null 2>&1 || true
 grant_project_role "serviceAccount:${CB_SERVICE_AGENT}" "roles/cloudbuild.serviceAgent"
 
 # ----------------------------
@@ -157,6 +197,9 @@ for SA in "${DEPLOY_SA}" "${CB_RUNTIME_SA}"; do
   gsutil iam ch "serviceAccount:${SA}:roles/storage.legacyBucketReader" "gs://${CLOUDBUILD_BUCKET}"
   gsutil iam ch "serviceAccount:${SA}:roles/storage.legacyBucketWriter" "gs://${CLOUDBUILD_BUCKET}"
 done
+# (Broader, simpler alternative per bucket):
+# gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
+# gsutil iam ch "serviceAccount:${CB_RUNTIME_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
 
 # ----------------------------
 # Secret Manager (optional API_KEY secret)
@@ -178,16 +221,17 @@ gcloud secrets add-iam-policy-binding "${SECRET_NAME}" \
   --project "${PROJECT_ID}" || true
 
 # ----------------------------
-# Impersonation setup
+# Impersonation setup (for local/Cloud Shell testing)
 # ----------------------------
-log "Configuring impersonation of DEPLOY_SA from your user"
+log "Configuring impersonation of DEPLOY_SA from your user (runs once if already granted)"
 
+# Allow your human user to impersonate DEPLOY_SA (replace the email below if needed)
 gcloud iam service-accounts add-iam-policy-binding "${DEPLOY_SA}" \
   --member="user:octavio.avarezdelcastillo@gmail.com" \
   --role="roles/iam.serviceAccountTokenCreator" \
   --project="${PROJECT_ID}" || true
 
-# Option A: all gcloud commands impersonate DEPLOY_SA
+# Option A: all gcloud commands impersonate DEPLOY_SA (current shell only)
 export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT="${DEPLOY_SA}"
 
 # Option B: helper function to impersonate only specific commands
@@ -199,6 +243,14 @@ echo
 echo "Impersonation ready. Examples:"
 echo "  gcloud builds submit --tag \"${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE}:test\" ./api"
 echo "  as_deploy_sa builds submit --tag \"${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE}:test\" ./api"
+
+# ----------------------------
+# Quick debug (optional)
+# ----------------------------
+log "Quick debug"
+gcloud auth list
+gcloud config list
+gsutil iam get "gs://${CLOUDBUILD_BUCKET}" | head -n 60 || true
 
 # ----------------------------
 # Summary
