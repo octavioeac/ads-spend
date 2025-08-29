@@ -39,10 +39,7 @@ jobs:
         run: |
           IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}"
           TAG="${GITHUB_SHA::8}"
-          docker build \
-          -f api/Dockerfile \  
-          -t "$IMAGE:$TAG" \
-          api                  
+          docker build -f api/Dockerfile -t "$IMAGE:$TAG" ./api
           docker push "$IMAGE:$TAG"
           echo "IMAGE_URI=$IMAGE:$TAG" >> $GITHUB_ENV
 
