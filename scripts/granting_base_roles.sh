@@ -240,6 +240,33 @@ echo "  gcloud builds submit --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO
 #   gsutil iam ch "serviceAccount:${CB_RUNTIME_SA}:roles/storage.admin" "gs://${STAGING_BUCKET}"
 #   [[ -n "${DEPLOY_SA:-}" ]] && gsutil iam ch "serviceAccount:${DEPLO_]()]()
 
+# ----------------------------
+# Impersonation (run commands as the DEPLOY_SA)
+# ----------------------------
+
+# 0) Make sure your human user can impersonate the SA (run once)
+#    You only need this the first time, or if it wasn't granted yet.
+gcloud iam service-accounts add-iam-policy-binding "${DEPLOY_SA}" \
+  --member="user:octavio.avarezdelcastillo@gmail.com" \
+  --role="roles/iam.serviceAccountTokenCreator" \
+  --project="${PROJECT_ID}" || true
+
+# 1) Easiest: set an env var so every 'gcloud' command impersonates DEPLOY_SA by default
+export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT="${DEPLOY_SA}"
+
+# 2) (Alternative) Helper function if you prefer to add the flag only to some commands
+as_deploy_sa() {
+  gcloud --impersonate-service-account="${DEPLOY_SA}" "$@"
+}
+
+echo
+echo "Impersonation ready. Examples:"
+echo "  # With global env var (applies to all gcloud commands):"
+echo "  gcloud builds submit --tag \"${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE}:test\" ./api"
+echo
+echo "  # Or with helper (adds the flag only to that command):"
+echo "  as_deploy_sa builds submit --tag \"${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE}:test\" ./api"
+
 
 echo
 echo "Setup finished with:"
