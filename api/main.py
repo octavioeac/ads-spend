@@ -136,94 +136,181 @@ def bq_exists():
     return run_bq_query(sql)
 
 # ------------ Metrics: CAC & ROAS ------------
-@app.get("/metrics/cac-roas")
-def metrics_cac_roas():
+@app.get("/metrics")
+def compare_periods(
+    first_start: str = Query(..., description="Start date of first period (YYYY-MM-DD)"),
+    first_end: str = Query(..., description="End date of first period (YYYY-MM-DD)"),
+    second_start: str = Query(..., description="Start date of second period (YYYY-MM-DD)"),
+    second_end: str = Query(..., description="End date of second period (YYYY-MM-DD)")
+):
     """
-    Returns CAC and ROAS for last 30 days vs previous 30 days.
-    Always returns both periods even if one has no data.
+    Compare two custom periods with CAC and ROAS metrics including deltas
+    Example: /metrics/compare-periods?first_start=2025-05-01&first_end=2025-05-31&second_start=2025-06-01&second_end=2025-06-30
     """
+    # Validate date formats
+    try:
+        first_start_dt = datetime.strptime(first_start, "%Y-%m-%d").date()
+        first_end_dt = datetime.strptime(first_end, "%Y-%m-%d").date()
+        second_start_dt = datetime.strptime(second_start, "%Y-%m-%d").date()
+        second_end_dt = datetime.strptime(second_end, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    # Validate date ranges
+    if first_start_dt > first_end_dt:
+        raise HTTPException(status_code=400, detail="First period start must be before end")
+    if second_start_dt > second_end_dt:
+        raise HTTPException(status_code=400, detail="Second period start must be before end")
+
+    # Build dynamic query
     sql = f"""
-    WITH base AS (
-      SELECT DATE(date) AS dt, SUM(spend) AS spend, SUM(conversions) AS conv
-      FROM `{PROJECT_ID}.{DATASET}.{TABLE}`
-      WHERE DATE(date) >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
-      GROUP BY dt
-    ),
-    agg AS (
-      SELECT
-        CASE WHEN dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN 'last_30' ELSE 'prev_30' END AS period,
-        SUM(spend) AS spend,
-        SUM(conv)  AS conv
-      FROM base
-      GROUP BY period
-    ),
-    periods AS (
-      SELECT 'last_30' AS period UNION ALL SELECT 'prev_30'
-    )
-    SELECT
-      periods.period,
-      IFNULL(agg.spend, 0) AS spend,
-      IFNULL(agg.conv, 0)  AS conv,
-      ROUND(IFNULL(agg.spend, 0) / NULLIF(agg.conv, 0), 2) AS CAC,
-      ROUND((IFNULL(agg.conv, 0) * 100) / NULLIF(agg.spend, 0), 2) AS ROAS
-    FROM periods
-    LEFT JOIN agg USING (period)
+WITH base AS (
+  SELECT
+    DATE(date) AS dt,
+    SUM(spend) AS spend,
+    SUM(conversions) AS conv,
+    CASE 
+      WHEN DATE(date) BETWEEN '{first_start_dt}' AND '{first_end_dt}' THEN 'first_period'
+      WHEN DATE(date) BETWEEN '{second_start_dt}' AND '{second_end_dt}' THEN 'second_period'
+      ELSE 'other'
+    END AS period
+  FROM `{PROJECT_ID}.{DATASET}.{TABLE}`
+  WHERE DATE(date) BETWEEN '{first_start_dt}' AND '{second_end_dt}'
+  GROUP BY dt, period
+),
+agg AS (
+  SELECT
+    period,
+    SUM(spend) AS spend,
+    SUM(conv) AS conv
+  FROM base
+  WHERE period IN ('first_period', 'second_period')
+  GROUP BY period
+),
+periods AS (
+  SELECT 'first_period' AS period UNION ALL SELECT 'second_period'
+),
+filled AS (
+  SELECT
+    p.period,
+    IFNULL(a.spend, 0) AS spend,
+    IFNULL(a.conv, 0) AS conv,
+    IFNULL(a.conv, 0) * 100 AS revenue,
+    SAFE_DIVIDE(IFNULL(a.spend, 0), NULLIF(IFNULL(a.conv, 0), 0)) AS CAC,
+    SAFE_DIVIDE(IFNULL(a.conv, 0) * 100, NULLIF(IFNULL(a.spend, 0), 0)) AS ROAS
+  FROM periods p
+  LEFT JOIN agg a USING (period)
+),
+pivoted AS (
+  SELECT
+    MAX(IF(period='second_period', spend, NULL)) AS spend_second,
+    MAX(IF(period='first_period', spend, NULL)) AS spend_first,
+    MAX(IF(period='second_period', conv, NULL)) AS conv_second,
+    MAX(IF(period='first_period', conv, NULL)) AS conv_first,
+    MAX(IF(period='second_period', revenue, NULL)) AS revenue_second,
+    MAX(IF(period='first_period', revenue, NULL)) AS revenue_first,
+    MAX(IF(period='second_period', CAC, NULL)) AS CAC_second,
+    MAX(IF(period='first_period', CAC, NULL)) AS CAC_first,
+    MAX(IF(period='second_period', ROAS, NULL)) AS ROAS_second,
+    MAX(IF(period='first_period', ROAS, NULL)) AS ROAS_first
+  FROM filled
+)
+SELECT
+  spend_second,
+  spend_first,
+  conv_second,
+  conv_first,
+  revenue_second,
+  revenue_first,
+  ROUND(CAC_second, 2) AS CAC_second,
+  ROUND(CAC_first, 2) AS CAC_first,
+  ROUND(ROAS_second, 2) AS ROAS_second,
+  ROUND(ROAS_first, 2) AS ROAS_first,
+  ROUND(SAFE_DIVIDE(spend_second - spend_first, NULLIF(spend_first, 0)) * 100, 2) AS spend_delta_pct,
+  ROUND(SAFE_DIVIDE(conv_second - conv_first, NULLIF(conv_first, 0)) * 100, 2) AS conversions_delta_pct,
+  ROUND(SAFE_DIVIDE(revenue_second - revenue_first, NULLIF(revenue_first, 0)) * 100, 2) AS revenue_delta_pct,
+  ROUND(SAFE_DIVIDE(CAC_second - CAC_first, NULLIF(CAC_first, 0)) * 100, 2) AS CAC_delta_pct,
+  ROUND(SAFE_DIVIDE(ROAS_second - ROAS_first, NULLIF(ROAS_first, 0)) * 100, 2) AS ROAS_delta_pct
+FROM pivoted
     """
+
+    # Execute query
     result = run_bq_query(sql)
-
-    # ---- Normaliza el resultado a una lista de dicts [{period, spend, conv, CAC, ROAS}, ...] ----
-    def _to_float(x):
-        if x in (None, "null", ""):
-            return None
-        try:
-            return float(x)
-        except (TypeError, ValueError):
-            return None
-
-    if isinstance(result, list):
-        normalized = result  # ya viene listo (lista plana)
-    else:
-        normalized = []
-        rows = result.get("rows", []) or []
-        fields = [f["name"] for f in result.get("schema", {}).get("fields", [])] or []
-        for r in rows:
-            obj = {fields[i]: r["f"][i]["v"] if i < len(r["f"]) else None for i in range(len(fields))}
-            normalized.append(obj)
-
-    # ---- Construye el dict por periodo ----
-    metrics = {}
-    for obj in normalized:
-        period = obj.get("period")
-        if not period:
-            continue
-        spend = _to_float(obj.get("spend")) or 0.0
-        conv  = _to_float(obj.get("conv"))  or 0.0
-        cac   = _to_float(obj.get("CAC"))
-        roas  = _to_float(obj.get("ROAS"))
-
-        metrics[period] = {
-            "spend": spend,
-            "conversions": int(conv),
-            "CAC": cac,
-            "ROAS": roas,
+    
+    # Parse results
+    rows = result.get("rows", [])
+    if not rows:
+        return {
+            "periods": {
+                "first": {"start": first_start, "end": first_end},
+                "second": {"start": second_start, "end": second_end}
+            },
+            "metrics": {
+                "spend_first": 0,
+                "spend_second": 0,
+                "conversions_first": 0,
+                "conversions_second": 0,
+                "revenue_first": 0,
+                "revenue_second": 0,
+                "CAC_first": None,
+                "CAC_second": None,
+                "ROAS_first": None,
+                "ROAS_second": None
+            },
+            "deltas_pct": {
+                "spend": None,
+                "conversions": None,
+                "revenue": None,
+                "CAC": None,
+                "ROAS": None
+            }
         }
 
-    # Asegura ambas llaves aunque falte un periodo
-    for p in ("last_30", "prev_30"):
-        metrics.setdefault(p, {"spend": 0.0, "conversions": 0, "CAC": None, "ROAS": None})
+    # Extract values
+    row = rows[0]
+    fields = [f["name"] for f in result["schema"]["fields"]]
+    values = {field: row["f"][i]["v"] for i, field in enumerate(fields)}
+    
+    # Convert to appropriate data types
+    def safe_float(value):
+        return float(value) if value not in (None, "null") else None
+    
+    spend_second = safe_float(values.get("spend_second"))
+    spend_first = safe_float(values.get("spend_first"))
+    conv_second = safe_float(values.get("conv_second"))
+    conv_first = safe_float(values.get("conv_first"))
+    revenue_second = safe_float(values.get("revenue_second"))
+    revenue_first = safe_float(values.get("revenue_first"))
+    cac_second = safe_float(values.get("CAC_second"))
+    cac_first = safe_float(values.get("CAC_first"))
+    roas_second = safe_float(values.get("ROAS_second"))
+    roas_first = safe_float(values.get("ROAS_first"))
 
-    # Deltas (%): maneja None/0 seguro
-    def pct_delta(new, old):
-        return round(((new - old) / old) * 100, 2) if (old not in (None, 0)) and (new is not None) else None
-
-    metrics["delta"] = {
-        "CAC":         pct_delta(metrics["last_30"]["CAC"],  metrics["prev_30"]["CAC"]),
-        "ROAS":        pct_delta(metrics["last_30"]["ROAS"], metrics["prev_30"]["ROAS"]),
-        "spend":       pct_delta(metrics["last_30"]["spend"], metrics["prev_30"]["spend"]),
-        "conversions": pct_delta(metrics["last_30"]["conversions"], metrics["prev_30"]["conversions"]),
+    return {
+        "periods": {
+            "first": {"start": first_start, "end": first_end},
+            "second": {"start": second_start, "end": second_end}
+        },
+        "metrics": {
+            "spend_first": spend_first or 0,
+            "spend_second": spend_second or 0,
+            "conversions_first": int(conv_first or 0),
+            "conversions_second": int(conv_second or 0),
+            "revenue_first": revenue_first or 0,
+            "revenue_second": revenue_second or 0,
+            "CAC_first": cac_first,
+            "CAC_second": cac_second,
+            "ROAS_first": roas_first,
+            "ROAS_second": roas_second
+        },
+        "deltas_pct": {
+            "spend": safe_float(values.get("spend_delta_pct")),
+            "conversions": safe_float(values.get("conversions_delta_pct")),
+            "revenue": safe_float(values.get("revenue_delta_pct")),
+            "CAC": safe_float(values.get("CAC_delta_pct")),
+            "ROAS": safe_float(values.get("ROAS_delta_pct"))
+        }
     }
-
-    return metrics
 
 @app.on_event("startup")
 async def show_routes():
