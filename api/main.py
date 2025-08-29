@@ -3,6 +3,8 @@ from fastapi import FastAPI, HTTPException, Query
 import logging
 import requests
 import os
+import subprocess
+from pathlib import Path
 
 app = FastAPI(title="metrics-api")
 
@@ -16,16 +18,62 @@ TABLE   = os.getenv("BQ_TABLE",   "ads_spend_raw")
 BQ_QUERY_URL = f"https://bigquery.googleapis.com/bigquery/v2/projects/{PROJECT_ID}/queries"
 METADATA_TOKEN_URL = "http://metadata/computeMetadata/v1/instance/service-accounts/default/token"
 
+def _metadata_token_available() -> bool:
+    """Quick probe to see if metadata server is reachable (Cloud Run / GCE)."""
+    try:
+        r = requests.get(
+            METADATA_TOKEN_URL,
+            headers={"Metadata-Flavor": "Google"},
+            timeout=1.5,
+        )
+        return r.status_code == 200
+    except requests.RequestException:
+        return False
+
 def get_access_token() -> str:
     """
-    Retrieve an access token from the GCP metadata server (works on GCE/Cloud Run with attached service account).
+    Obtain an OAuth2 access token in this order:
+      1) Metadata server (Cloud Run / GCE) -> recommended in production.
+      2) Local dev: `gcloud auth print-access-token`.
+      3) If GOOGLE_APPLICATION_CREDENTIALS is set, raise a hint (use google-auth library if needed).
     """
+    # 1) Metadata (Cloud Run / GCE)
+    if _metadata_token_available():
+        try:
+            r = requests.get(METADATA_TOKEN_URL, headers={"Metadata-Flavor": "Google"}, timeout=3)
+            r.raise_for_status()
+            return r.json()["access_token"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Cannot get token from metadata server: {e}")
+
+    # 2) Local with gcloud
     try:
-        r = requests.get(METADATA_TOKEN_URL, headers={"Metadata-Flavor": "Google"}, timeout=5)
-        r.raise_for_status()
-        return r.json()["access_token"]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot get GCP access token: {e}")
+        token = subprocess.check_output(
+            ["gcloud", "auth", "print-access-token"],
+            text=True,
+            timeout=5,
+        ).strip()
+        if token:
+            return token
+    except Exception:
+        pass
+
+    # 3) SA JSON present (we avoid manual JWT here to keep it minimal)
+    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if cred_path and Path(cred_path).exists():
+        raise HTTPException(
+            status_code=500,
+            detail=("Service Account JSON detected via GOOGLE_APPLICATION_CREDENTIALS, "
+                    "but this sample uses REST + metadata/gcloud tokens. "
+                    "Run under Cloud Run/VM or authenticate locally with 'gcloud auth login', "
+                    "or switch to google-auth library for SA JSON.")
+        )
+
+    raise HTTPException(
+        status_code=500,
+        detail=("Cannot obtain an access token. "
+                "Run on Cloud Run/VM (metadata), or authenticate locally with 'gcloud auth login'.")
+    )
 
 def run_bq_query(sql: str, timeout_sec: int = 30) -> dict:
     """
@@ -39,10 +87,15 @@ def run_bq_query(sql: str, timeout_sec: int = 30) -> dict:
     body = {"query": sql, "useLegacySql": False}
     try:
         resp = requests.post(BQ_QUERY_URL, headers=headers, json=body, timeout=timeout_sec)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Surface BQ error body for easier debugging
+            raise HTTPException(
+                status_code=502,
+                detail=f"BigQuery HTTP {resp.status_code}: {resp.text[:800]}"
+            )
         return resp.json()
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"BigQuery error: {e}")
+        raise HTTPException(status_code=502, detail=f"BigQuery request failed: {e}")
 
 @app.get("/")
 def root():
@@ -115,15 +168,15 @@ def metrics_cac_roas():
         vals = {f["name"]: f["v"] for f in row["f"]}
         metrics[vals["period"]] = {
             "spend": float(vals["spend"]),
-            "conversions": int(vals["conv"]),
-            "CAC": float(vals["CAC"]),
-            "ROAS": float(vals["ROAS"]),
+            "conversions": int(float(vals["conv"])) if vals["conv"] is not None else 0,
+            "CAC": float(vals["CAC"]) if vals["CAC"] is not None else None,
+            "ROAS": float(vals["ROAS"]) if vals["ROAS"] is not None else None,
         }
 
     # Calculate percentage deltas if both periods exist
     if "last_30" in metrics and "prev_30" in metrics:
         def pct_delta(new, old):
-            return round(((new - old) / old) * 100, 2) if old else None
+            return round(((new - old) / old) * 100, 2) if (old not in (None, 0)) and (new is not None) else None
 
         metrics["delta"] = {
             "CAC": pct_delta(metrics["last_30"]["CAC"], metrics["prev_30"]["CAC"]),
