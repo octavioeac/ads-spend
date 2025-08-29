@@ -6,10 +6,13 @@ import os
 import subprocess
 from pathlib import Path
 import requests
+from routers import nlq, metrics
 
 # ------------ App & Logging ------------
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 app = FastAPI(title="metrics-api")
+app.include_router(nlq.router)
+app.include_router(metrics.router)
 
 # ------------ n8n ------------
 # Test URL; when workflow is active, change to /webhook/...
