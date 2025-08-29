@@ -313,6 +313,47 @@ FROM pivoted
         }
     }
 
+@app.get("/metadata/months-available")
+def get_available_months():
+    """
+    Get available months in the dataset with record counts
+    Returns list of months with start/end dates and record counts
+    """
+    sql = f"""
+SELECT
+  DATE_TRUNC(DATE(date), MONTH) as data_month,
+  MIN(DATE(date)) as month_start,
+  MAX(DATE(date)) as month_end,
+  COUNT(*) as record_count
+FROM `{PROJECT_ID}.{DATASET}.{TABLE}`
+GROUP BY data_month
+ORDER BY data_month DESC
+    """
+
+    # Execute query
+    result = run_bq_query(sql)
+    
+    # Parse results
+    rows = result.get("rows", [])
+    months_data = []
+    
+    for row in rows:
+        fields = [f["name"] for f in result["schema"]["fields"]]
+        values = {field: row["f"][i]["v"] for i, field in enumerate(fields)}
+        
+        months_data.append({
+            "data_month": values["data_month"],
+            "month_start": values["month_start"],
+            "month_end": values["month_end"],
+            "record_count": int(values["record_count"])
+        })
+    
+    return {
+        "available_months": months_data,
+        "total_months": len(months_data)
+    }    
+
+
 @app.on_event("startup")
 async def show_routes():
     paths = [getattr(r, "path", str(r)) for r in app.router.routes]
