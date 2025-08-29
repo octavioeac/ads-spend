@@ -2,49 +2,100 @@
 set -euo pipefail
 
 # --------------------------------------------------------------------
-# This script configures IAM roles and enables core APIs so that the
-# GitHub Actions service account (DEPLOY_SA) can:
-#   - Use Cloud Build (upload sources to *_cloudbuild bucket and build)
-#   - Push images to Artifact Registry
-#   - Deploy to Cloud Run (and impersonate the runtime SA)
-#   - Read secrets from Secret Manager
+# CI/CD Setup Wizard for Google Cloud (GitHub Actions)
 #
-# It is idempotent: re-running it is safe.
+# This script:
+#   • Interactively collects core config (Project ID, region, repo, service)
+#   • Grants IAM roles to the CI/CD Service Account (DEPLOY_SA)
+#   • Ensures the Cloud Build staging bucket exists and is accessible
+#   • Ensures the Cloud Build Service Agent identity exists and has its role
+#   • (Optional) Creates/updates the API_KEY secret in Secret Manager
+#   • Prints a summary of the configuration
 #
-# Optional:
-#   - Ensure the Cloud Build staging bucket exists and grant access
-#   - Allow a human user to impersonate DEPLOY_SA for local tests
+# Safe to re-run (idempotent where possible).
 # --------------------------------------------------------------------
 
-# --------- EDIT THESE IF NEEDED ----------
-PROJECT_ID="n8n-ads-spend"
-REGION="us-central1"
-REPO="n8n-repo"                              # Artifact Registry repo (already created)
-SERVICE="metrics-api"                        # Cloud Run service name
-DEPLOY_SA="github-test@${PROJECT_ID}.iam.gserviceaccount.com"     # CI/CD SA
-RUNTIME_SA="cr-metrics@${PROJECT_ID}.iam.gserviceaccount.com"     # Cloud Run runtime SA
-# Set to your Gmail if you want to test impersonation from Cloud Shell:
-HUMAN_USER_EMAIL="octavio.avarezdelcastillo@gmail.com"
-# -----------------------------------------
+echo "=== CI/CD Setup Wizard ==="
 
+# 1) PROJECT_ID → detect from gcloud config or ask
+PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
+if [[ -z "${PROJECT_ID}" ]]; then
+  read -rp "Enter your GCP Project ID: " PROJECT_ID
+fi
+echo "Using PROJECT_ID=${PROJECT_ID}"
+
+# 2) REGION → default
+DEFAULT_REGION="us-central1"
+read -rp "Enter region for Cloud Run / Artifact Registry [default: ${DEFAULT_REGION}]: " REGION
+REGION="${REGION:-${DEFAULT_REGION}}"
+echo "Using REGION=${REGION}"
+
+# 3) REPO → Artifact Registry repo name
+DEFAULT_REPO="n8n-repo"
+read -rp "Enter Artifact Registry repo name [default: ${DEFAULT_REPO}]: " REPO
+REPO="${REPO:-${DEFAULT_REPO}}"
+echo "Using REPO=${REPO}"
+
+# 4) SERVICE → Cloud Run service name
+DEFAULT_SERVICE="metrics-api"
+read -rp "Enter Cloud Run service name [default: ${DEFAULT_SERVICE}]: " SERVICE
+SERVICE="${SERVICE:-${DEFAULT_SERVICE}}"
+echo "Using SERVICE=${SERVICE}"
+
+# 5) RUNTIME_SA → runtime Service Account (email is <name>@<project>.iam.gserviceaccount.com)
+DEFAULT_RUNTIME_SA_NAME="cr-metrics"
+read -rp "Enter runtime Service Account NAME [default: ${DEFAULT_RUNTIME_SA_NAME}]: " RUNTIME_SA_NAME
+RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-${DEFAULT_RUNTIME_SA_NAME}}"
+RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+echo "Using RUNTIME_SA=${RUNTIME_SA}"
+
+# 6) BigQuery dataset/table (static defaults, change if needed)
+DATASET="ads_warehouse"
+TABLE="ads_spend_raw"
+echo "Using BigQuery DATASET=${DATASET} TABLE=${TABLE}"
+
+# 7) Secret (for API_KEY)
+DEFAULT_SECRET="metrics-api-key"
+read -rp "Enter Secret Manager name for API_KEY [default: ${DEFAULT_SECRET}]: " SECRET_NAME
+SECRET_NAME="${SECRET_NAME:-${DEFAULT_SECRET}}"
+
+DEFAULT_API_KEY_VALUE="super-secret"
+read -rp "Enter initial API_KEY value (press Enter to skip/keep existing) [default: ${DEFAULT_API_KEY_VALUE}]: " API_KEY_VALUE
+API_KEY_VALUE="${API_KEY_VALUE:-${DEFAULT_API_KEY_VALUE}}"
+
+# 8) DEPLOY_SA (the CI/CD service account used by GitHub Actions)
+DEFAULT_DEPLOY_SA="github-test@${PROJECT_ID}.iam.gserviceaccount.com"
+read -rp "Enter Deploy Service Account EMAIL [default: ${DEFAULT_DEPLOY_SA}]: " DEPLOY_SA
+DEPLOY_SA="${DEPLOY_SA:-${DEFAULT_DEPLOY_SA}}"
+echo "Using DEPLOY_SA=${DEPLOY_SA}"
+
+# 9) PROJECT_NUMBER (fetch dynamically)
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+echo "Detected PROJECT_NUMBER=${PROJECT_NUMBER}"
+
+# Derived
 CLOUDBUILD_BUCKET="${PROJECT_ID}_cloudbuild"
+CB_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+DEFAULT_COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-echo "==> Enabling required APIs on project: ${PROJECT_ID}"
+echo
+echo "==> Enabling required APIs on project ${PROJECT_ID}..."
 gcloud services enable \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   run.googleapis.com \
   secretmanager.googleapis.com \
+  serviceusage.googleapis.com \
   --project="${PROJECT_ID}"
 
-echo "==> Granting base roles to CI/CD service account: ${DEPLOY_SA}"
+echo "==> Granting roles to CI/CD Service Account: ${DEPLOY_SA}"
 
-# Allow the service account to use project services
+# Use project services
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/serviceusage.serviceUsageConsumer"
 
-# Cloud Build (submit builds). You may use 'roles/cloudbuild.builds.submitter' for least privilege.
+# Cloud Build (submit builds). For least privilege, you can swap to roles/cloudbuild.builds.submitter
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/cloudbuild.builds.editor"
@@ -54,51 +105,87 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/artifactregistry.writer"
 
-# Cloud Run admin (deploy services)
+# Cloud Run (deploy services)
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/run.admin"
 
-# Allow CI/CD SA to impersonate the Cloud Run runtime SA
+# Secret Manager (read secrets)
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${DEPLOY_SA}" \
+  --role="roles/secretmanager.secretAccessor"
+
+echo "==> Ensuring Cloud Build Service Agent exists and has its role..."
+# Create/ensure the service identity for Cloud Build (no-op if already present)
+gcloud beta services identity create \
+  --service=cloudbuild.googleapis.com \
+  --project="${PROJECT_ID}" || true
+
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${CB_SERVICE_AGENT}" \
+  --role="roles/cloudbuild.serviceAgent"
+
+echo "==> (Optional) Grant 'Cloud Build Service Account' to Default Compute Engine SA..."
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${DEFAULT_COMPUTE_SA}" \
+  --role="roles/cloudbuild.builds.builder"
+
+echo "==> Allow DEPLOY_SA to impersonate the Cloud Run runtime SA..."
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/iam.serviceAccountUser" \
   --project="${PROJECT_ID}"
-
-# Secret Manager (read secrets referenced in deploy)
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="serviceAccount:${DEPLOY_SA}" \
-  --role="roles/secretmanager.secretAccessor"
 
 echo "==> Ensuring Cloud Build staging bucket exists: gs://${CLOUDBUILD_BUCKET}"
 if ! gsutil ls -p "${PROJECT_ID}" "gs://${CLOUDBUILD_BUCKET}" >/dev/null 2>&1; then
   gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${CLOUDBUILD_BUCKET}"
 fi
 
-echo "==> Granting object admin on Cloud Build bucket to ${DEPLOY_SA}"
-gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.objectAdmin" "gs://${CLOUDBUILD_BUCKET}" || true
-# If needed, also grant legacy writer (some org policies still require it):
-# gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.legacyBucketWriter" "gs://${CLOUDBUILD_BUCKET}" || true
+echo "==> Granting bucket-level and object permissions on the staging bucket..."
+# Objects permissions
+gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.objectAdmin" "gs://${CLOUDBUILD_BUCKET}"
+# Bucket-level (some org policies/flows require legacy roles)
+gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.legacyBucketReader" "gs://${CLOUDBUILD_BUCKET}"
+gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.legacyBucketWriter" "gs://${CLOUDBUILD_BUCKET}"
+# Alternative (broader) for simplicity at bucket scope:
+# gsutil iam ch "serviceAccount:${DEPLOY_SA}:roles/storage.admin" "gs://${CLOUDBUILD_BUCKET}"
 
-# ---------------- Optional: local testing via impersonation ----------------
-# This lets your human user mint tokens to act as DEPLOY_SA from Cloud Shell.
-if [[ -n "${HUMAN_USER_EMAIL}" ]]; then
-  echo "==> (Optional) Allowing ${HUMAN_USER_EMAIL} to impersonate ${DEPLOY_SA}"
-  gcloud iam service-accounts add-iam-policy-binding "${DEPLOY_SA}" \
-    --member="user:${HUMAN_USER_EMAIL}" \
-    --role="roles/iam.serviceAccountTokenCreator" \
-    --project="${PROJECT_ID}" || true
+echo "==> (Optional) Create/update Secret Manager secret for API_KEY..."
+# Create the secret if it doesn't exist
+if ! gcloud secrets describe "${SECRET_NAME}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
+  gcloud secrets create "${SECRET_NAME}" \
+    --replication-policy="automatic" \
+    --project "${PROJECT_ID}"
 fi
-# --------------------------------------------------------------------------
+# Add a new version (skip if you don't want to overwrite)
+if [[ -n "${API_KEY_VALUE}" ]]; then
+  printf "%s" "${API_KEY_VALUE}" | gcloud secrets versions add "${SECRET_NAME}" \
+    --data-file=- \
+    --project "${PROJECT_ID}" || true
+fi
+# Ensure DEPLOY_SA can access the secret (already covered by project-wide role, but this is explicit if needed)
+gcloud secrets add-iam-policy-binding "${SECRET_NAME}" \
+  --member="serviceAccount:${DEPLOY_SA}" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project "${PROJECT_ID}" || true
 
-echo "==> Verification (quick checks)"
-echo " - Project IAM bindings for ${DEPLOY_SA}:"
-gcloud projects get-iam-policy "${PROJECT_ID}" \
-  --flatten="bindings[].members" \
-  --filter="bindings.members:serviceAccount:${DEPLOY_SA}" \
-  --format="table(bindings.role)" || true
+echo
+echo "=== Quick debug ==="
+gcloud auth list
+gcloud config list
+gsutil iam get "gs://${CLOUDBUILD_BUCKET}" | head -n 40 || true
 
-echo " - Bucket IAM (first lines):"
-gsutil iam get "gs://${CLOUDBUILD_BUCKET}" | head -n 30 || true
-
-echo "Configuration completed successfully.............."
+echo
+echo "Setup finished with:"
+echo "  PROJECT_ID=${PROJECT_ID}"
+echo "  PROJECT_NUMBER=${PROJECT_NUMBER}"
+echo "  REGION=${REGION}"
+echo "  REPO=${REPO}"
+echo "  SERVICE=${SERVICE}"
+echo "  RUNTIME_SA=${RUNTIME_SA}"
+echo "  DATASET=${DATASET}  TABLE=${TABLE}"
+echo "  SECRET=${SECRET_NAME}"
+echo "  DEPLOY_SA=${DEPLOY_SA}"
+echo "  CLOUDBUILD_BUCKET=gs://${CLOUDBUILD_BUCKET}"
+echo
+echo "You can now run 'gcloud builds submit --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE}:test .' from your CI or Cloud Shell (impersonating ${DEPLOY_SA})."
