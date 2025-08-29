@@ -1,0 +1,65 @@
+name: Cloud Run – deploy from image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "api/**"
+      - ".github/workflows/deploy-from-image.yml"
+
+env:
+  GCP_PROJECT_ID: n8n-ads-spend
+  REGION: us-central1
+  REPO: n8n-repo
+  SERVICE: metrics-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # para WIF
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Auth (WIF o JSON)
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          # o: credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Docker login to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev -q
+
+      - name: Build & Push image
+        working-directory: api
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ env.SERVICE }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker tag "$IMAGE" "${IMAGE%:*}:latest"
+          docker push "$IMAGE"
+          docker push "${IMAGE%:*}:latest"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image "${IMAGE}" \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-env-vars "PROJECT_ID=${{ env.GCP_PROJECT_ID }},BQ_DATASET=ads_warehouse,BQ_TABLE=ads_spend_raw,LOCATION=${{ env.REGION }},REPO=${{ env.REPO }},SERVICE=${{ env.SERVICE }},RUNTIME_SA_EMAIL=cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --set-secrets "API_KEY=metrics-api-key:latest"
+
+      - name: Output URL
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE }} --region ${{ env.REGION }} --format='value(status.url)')
+          echo "Service URL: $URL"
