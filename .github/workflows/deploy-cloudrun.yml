@@ -85,16 +85,8 @@ jobs:
             --platform managed \
             --service-account cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --allow-unauthenticated \
-            --set-env-vars \
-              PROJECT_ID=${{ env.GCP_PROJECT_ID }},\
-              BQ_DATASET=ads_warehouse,\
-              BQ_TABLE=ads_spend_raw,\
-              LOCATION=${{ env.REGION }},\
-              REPO=${{ env.REPO }},\
-              SERVICE=${{ env.SERVICE }},\
-              RUNTIME_SA_EMAIL=cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-            --set-secrets \
-              API_KEY=metrics-api-key:latest
+            --set-env-vars "PROJECT_ID=${{ env.GCP_PROJECT_ID }},BQ_DATASET=ads_warehouse,BQ_TABLE=ads_spend_raw,LOCATION=${{ env.REGION }},REPO=${{ env.REPO }},SERVICE=${{ env.SERVICE }},RUNTIME_SA_EMAIL=cr-metrics@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --set-secrets "API_KEY=metrics-api-key:latest"
 
       # --- OUTPUT URL ---
       - name: Output Service URL
