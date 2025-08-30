@@ -74,9 +74,9 @@ rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-echo "== Writing main.py (train + predict) =="
+echo "== Writing main.py (train + predict con limpieza numérica) =="
 cat > main.py << 'PY'
-import os, json, pickle, logging
+import os, json, pickle, logging, re
 import pandas as pd
 from typing import List, Dict, Any
 from google.cloud import bigquery, storage
@@ -100,6 +100,27 @@ def _encode_categoricals(df, cols):
         df[c] = le.fit_transform(df[c].astype(str))
         encoders[c] = le.classes_.tolist()
     return df, encoders
+
+def _clean_numeric_series(s):
+    s = s.astype(str).str.replace(r'[^\d\.\-]', '', regex=True)
+    return pd.to_numeric(s, errors='coerce')
+
+def _ensure_numeric(df, cols, drop_invalid=True, context=""):
+    before = len(df)
+    for c in cols:
+        df[c] = _clean_numeric_series(df[c])
+    if drop_invalid:
+        df.dropna(subset=cols, inplace=True)
+    after = len(df)
+    dropped = before - after
+    if dropped > 0:
+        logging.info("Dropped %d rows invalid %s in %s", dropped, cols, context)
+    if df[cols].isna().any().any():
+        nan_cols = [c for c in cols if df[c].isna().any()]
+        raise ValueError(f"Non-numeric in {nan_cols} ({context})")
+    for c in cols:
+        df[c] = df[c].astype(float)
+    return df
 
 # ==== TRAIN ====
 def train_model(request):
@@ -125,6 +146,9 @@ def train_model(request):
 
         X = df[['platform','account','country','device','spend','impressions']].copy()
         y = df['roas'].astype(float)
+
+        # asegurar numéricos
+        X = _ensure_numeric(X, ['spend','impressions'], drop_invalid=True, context="train")
 
         cat_cols = ['platform','account','country','device']
         X, encoders = _encode_categoricals(X, cat_cols)
@@ -199,6 +223,13 @@ def predict_roas(request):
         df = _prepare_dataframe(payload)
         cat_cols = ["platform","account","country","device"]
         df[cat_cols] = _encode_for_predict(df[cat_cols], {c: encoders[c] for c in cat_cols})
+
+        # asegurar numéricos
+        try:
+            df = _ensure_numeric(df, ['spend','impressions'], drop_invalid=False, context="predict")
+        except Exception as e:
+            return (json.dumps({"status":"error","message":str(e)}), 400, {"Content-Type":"application/json"})
+
         preds = model.predict(df)
         return (json.dumps({"predictions": [float(x) for x in preds]}),
                 200, {"Content-Type":"application/json"})
@@ -256,7 +287,7 @@ echo "PREDICT URL: $PRED_URL"
 echo
 echo "================= DEPLOYED ================="
 echo "Train with curl:"
-echo "curl -X POST \"$TRAIN_URL\""
+echo "curl -X POST \"$TRAIN_URL\" -H 'Content-Type: application/json' -d '{}'"
 echo
 echo "Predict single item:"
 echo "curl -s -X POST \"$PRED_URL\" -H 'Content-Type: application/json' -d '{\"platform\":\"Google\",\"account\":\"acc1\",\"country\":\"MX\",\"device\":\"mobile\",\"spend\":120,\"impressions\":4000}'"
