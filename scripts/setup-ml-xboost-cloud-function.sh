@@ -6,11 +6,11 @@ PROJECT_ID="n8n-ads-spend"
 REGION="us-central1"
 FUNCTION_NAME="train_roas_model"
 BUCKET_MODELOS="roas-models-${PROJECT_ID}"   # GCS bucket for model + encoders
-# Optional: function sizing
 MEMORY="1GiB"
 TIMEOUT="540s"
 # =====================================================
 
+echo "== Setting project =="
 gcloud config set project "$PROJECT_ID" >/dev/null
 
 echo "== Enabling required APIs =="
@@ -32,11 +32,10 @@ if sa_exists "$APPENGINE_SA"; then
 elif sa_exists "$COMPUTE_SA"; then
   SA_EMAIL="$COMPUTE_SA"; echo "Using Compute Engine default SA: $SA_EMAIL"
 else
-  SA_BASENAME="cf-train"
-  SA_EMAIL="${SA_BASENAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+  SA_EMAIL="cf-train@${PROJECT_ID}.iam.gserviceaccount.com"
   if ! sa_exists "$SA_EMAIL"; then
     echo "Creating custom SA: $SA_EMAIL"
-    gcloud iam service-accounts create "$SA_BASENAME" \
+    gcloud iam service-accounts create cf-train \
       --project "$PROJECT_ID" \
       --display-name "Cloud Functions Training SA"
   fi
@@ -55,7 +54,7 @@ else
 fi
 
 echo "== Granting minimum roles to SA (${SA_EMAIL}) =="
-# BigQuery: view data + run jobs
+# BigQuery: read data + run jobs
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${SA_EMAIL}" \
   --role="roles/bigquery.dataViewer" >/dev/null
