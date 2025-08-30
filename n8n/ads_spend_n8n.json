@@ -1,0 +1,1071 @@
+{
+  "name": "ads_spend",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1680,
+        -560
+      ],
+      "id": "cbd6a311-69f0-4573-ae09-278a13bd6dec",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "=data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -624,
+        1392
+      ],
+      "id": "b1952c3e-ef84-4c7b-8fc4-ad4076e83380",
+      "name": "Extract from File",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        1392
+      ],
+      "id": "e16b9602-f32a-4327-88e3-4948f3e8a473",
+      "name": "Remove Duplicates"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1712,
+        80
+      ],
+      "id": "0017dc8c-3953-454d-b552-096cce449b9e",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "http://metadata/computeMetadata/v1/instance/service-accounts/default/token",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Metadata-Flavor",
+              "value": "Google"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -656,
+        -336
+      ],
+      "id": "6f23fe17-94dd-4632-9eb3-789437df1913",
+      "name": "Get Token (Metadata)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "# AUTHENTICATION\nThis node retrieves an access_token from the GCP VM Metadata Server. \nThe token represents the attached Service Account and is required \nto authenticate all subsequent API requests (BigQuery + GCS).\n",
+        "height": 352,
+        "width": 704,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1120,
+        -528
+      ],
+      "typeVersion": 1,
+      "id": "6d0365b8-2864-4039-baff-15aa6ad6f8d1",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "# VALIDATE DATA IN TABLE\nThis step queries BigQuery to check if the table \nads_warehouse.ads_spend_raw already contains rows.\n\n- If COUNT > 0 → the table has data (skip or branch to avoid duplicates).\n- If COUNT = 0 → the table is empty and new data can be loaded.",
+        "height": 368,
+        "width": 640
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -288,
+        -464
+      ],
+      "typeVersion": 1,
+      "id": "829b74c7-770f-4d0c-a6bb-4d54f5514fab",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "322ed103-a8ba-4651-9a8e-baad507ee236",
+              "leftValue": "={{ $json.body }}",
+              "rightValue": 400,
+              "operator": {
+                "type": "object",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        352,
+        -336
+      ],
+      "id": "f871cf6f-2acf-4b4e-8039-273e32f7250f",
+      "name": "Validation of code",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0e5eb47b-9774-4d5c-80e6-c8c19cebc168",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": {},
+              "operator": {
+                "type": "number",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1040,
+        80
+      ],
+      "id": "4c4823bc-d01f-4700-9526-d159ce42bded",
+      "name": "Validation code"
+    },
+    {
+      "parameters": {
+        "content": "# VALIDATE OR CREATE DATASET (ads_warehouse)\n\n1. Check if the dataset \"ads_warehouse\" exists in BigQuery.\n   - HTTP Request (GET) → /datasets/ads_warehouse\n\n2. Validation code (IF):\n   - If statusCode = 200 → dataset exists → go forward.\n   - If statusCode = 404 → dataset not found → create it.\n\n3. Create ads_warehouse (POST):\n   - Creates the dataset in US location with the required configuration.\n\n4. Merge:\n   - Joins both paths (existing or newly created) to continue the workflow.",
+        "height": 816,
+        "width": 1184,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        496,
+        -320
+      ],
+      "typeVersion": 1,
+      "id": "a43e69a2-4543-481c-a90d-7dab34146a87",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse/tables/ads_spend_raw",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Get Token (Metadata)').item.json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        -240
+      ],
+      "id": "6c3a9826-79ed-4025-a8c0-e57eb3d92fa6",
+      "name": "BQ - Check in BigQuery Data",
+      "notesInFlow": false,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "=Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        752,
+        80
+      ],
+      "id": "12ce1dfb-b6e8-4f9d-b7f9-735c4b676a36",
+      "name": "BQ - Validation Exisiting ads_warehouse",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Get Token (Metadata)').item.json.access_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"datasetReference\": {\n    \"projectId\": \"n8n-ads-spend\",\n    \"datasetId\": \"ads_warehouse\"\n  },\n  \"location\": \"US\"\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        240
+      ],
+      "id": "53187beb-b728-484a-a316-c133d16fb4d2",
+      "name": "BQ - Create ads_warehouse"
+    },
+    {
+      "parameters": {
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse/tables/ads_spend_raw",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Get Token (Metadata)').item.json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2192,
+        80
+      ],
+      "id": "2b9d89bc-09f3-4390-abf2-b9eba4d39c1f",
+      "name": "BQ - Validate table ads_spend_raw",
+      "notesInFlow": false,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse/tables",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Get Token (Metadata)').item.json.access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"tableReference\": {\n    \"projectId\": \"n8n-ads-spend\",\n    \"datasetId\": \"ads_warehouse\",\n    \"tableId\": \"ads_spend_raw\"\n  },\n  \"schema\": {\n    \"fields\": [\n      { \"name\": \"date\", \"type\": \"DATE\" },\n      { \"name\": \"platform\", \"type\": \"STRING\" },\n      { \"name\": \"account\", \"type\": \"STRING\" },\n      { \"name\": \"campaign\", \"type\": \"STRING\" },\n      { \"name\": \"country\", \"type\": \"STRING\" },\n      { \"name\": \"device\", \"type\": \"STRING\" },\n      { \"name\": \"spend\", \"type\": \"NUMERIC\" },\n      { \"name\": \"clicks\", \"type\": \"INT64\" },\n      { \"name\": \"impressions\", \"type\": \"INT64\" },\n      { \"name\": \"conversions\", \"type\": \"INT64\" }\n    ]\n  }\n}\n",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2784,
+        64
+      ],
+      "id": "c65d0d83-0cb3-4456-a2c2-7dfe16e145a7",
+      "name": "BQ - Create table ads_spend_raw",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse/tables/ads_spend_raw",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Get Token (Metadata)').item.json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1424,
+        1120
+      ],
+      "id": "c28c762a-8747-4ae6-9e65-f770b2296b1a",
+      "name": "BQ - Check in BigQuery Data ads_spend_raw",
+      "notesInFlow": false,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "492d5b17-39df-48c8-8b52-fa77292175be",
+              "leftValue": "={{ $json.body.error.code }}",
+              "rightValue": 404,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2480,
+        80
+      ],
+      "id": "779b1a7a-9d51-45bf-822b-10c8b63642fc",
+      "name": "iF - Validate code 404 is true"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3392,
+        288
+      ],
+      "id": "813ca002-6bbe-4123-a4a0-e1e35a4e274f",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5374249b-63e2-42e7-809b-d3203c237057",
+              "leftValue": "={{ $json.body.numRows }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1200,
+        1408
+      ],
+      "id": "7817c0a9-f2ff-4d6c-b0dd-3324d59bebd3",
+      "name": "If - Validate numRows 0"
+    },
+    {
+      "parameters": {
+        "url": "https://storage.googleapis.com/storage/v1/b/n8n-ads-spend-raw/o/ads_spend.csv?alt=media",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "=Authorization",
+              "value": "=Bearer {{ $('Get Token (Metadata)').item.json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -880,
+        1392
+      ],
+      "id": "87081096-74cd-4e19-846a-a27427b50150",
+      "name": "CS - Access to Cloud Storage",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "content": "# VALIDATE OR CREATE TABLE (ads_spend_raw)\n\n1. Validate if the table \"ads_spend_raw\" exists in dataset \"ads_warehouse\".\n   - HTTP GET → /tables/ads_spend_raw\n\n2. IF condition:\n   - If statusCode = 404 → table does not exist → create table.\n   - If statusCode = 200 → table exists → skip creation.\n\n3. Create table (POST):\n   - Defines schema: date, platform, account, campaign, country,\n     device, spend, clicks, impressions, conversions.\n\n4. Merge:\n   - Both paths (already exists or newly created) converge here,\n     ensuring the workflow continues with a valid table.\n",
+        "height": 896,
+        "width": 1456,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1728,
+        -368
+      ],
+      "typeVersion": 1,
+      "id": "1520f18a-3b30-4401-8a73-e07a4bab4206",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "jsCode": "function toInt(v) {\n  if (v === '' || v == null) return null;\n  return parseInt(String(v).replace(/,/g, ''), 10);\n}\nfunction toNum(v) {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  if (/^\\d{1,3}(\\.\\d{3})+,\\d+$/.test(s)) return Number(s.replace(/\\./g, '').replace(',', '.'));\n  return Number(s.replace(/,/g, ''));\n}\nfunction toDate(v) {\n  if (!v) return null;\n  return String(v).trim();\n}\n\nconst SRC = 'gs://n8n-ads-spend-raw/ads_spend.csv';\n\nconst out = $input.all().map(item => {\n  const j = item.json;\n  return {\n    json: {\n          date: toDate(j.date),\n          platform: (j.platform || '').trim(),\n          account: (j.account || '').trim(),\n          campaign: (j.campaign || '').trim(),\n          country: (j.country || '').trim(),\n          device: (j.device || '').trim(),\n          spend: toNum(j.spend),\n          clicks: toInt(j.clicks),\n          impressions: toInt(j.impressions),\n          conversions: toInt(j.conversions),\n          load_date: new Date().toISOString(),\n          source_file_name: SRC\n    }\n  };\n});\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        1392
+      ],
+      "id": "791a2f09-f604-4a7b-a7cf-621de79108b4",
+      "name": "Transform to BigQuery Schema"
+    },
+    {
+      "parameters": {
+        "content": "# TRANSFORM & PREPARE DATA FOR BIGQUERY\n\n1. Extract from File → Parse CSV rows.\n2. Remove Duplicates → Ensure unique records.\n3. Transform to BigQuery Schema → \n   - Cast types (DATE, NUMERIC, INT64).\n   - Add metadata (load_date, source_file_name).\n4. Prepare insertAll Payload →\n   - Wrap items into 'rows' array format expected by BigQuery insertAll.\n",
+        "height": 992,
+        "width": 1936,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1520,
+        640
+      ],
+      "typeVersion": 1,
+      "id": "1b4e61ff-e641-418f-ba3a-0778795871ad",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simple insertId hash to avoid duplicates\nfunction makeInsertId(j) {\n  const key = [\n    j.date, j.platform, j.account, j.campaign,\n    j.country, j.device, j.spend, j.clicks, j.impressions, j.conversions\n  ].join('|');\n  let h = 0;\n  for (let i = 0; i < key.length; i++) {\n    h = ((h << 5) - h) + key.charCodeAt(i) | 0;\n  }\n  return String(h);\n}\n\n// Convert input items into rows\nconst rows = $input.all().map(item => {\n  const j = item.json;\n  return {\n    insertId: makeInsertId(j),\n    json: j\n  };\n});\n\n// Return BigQuery insertAll payload\nreturn [\n  {\n    json: {\n      kind: \"bigquery#tableDataInsertAllRequest\",\n      skipInvalidRows: true,\n      ignoreUnknownValues: true,\n      rows: rows\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        1392
+      ],
+      "id": "5cd9a57f-5895-4ace-8af2-619c9addee6b",
+      "name": "Make the batch",
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse/tables/ads_spend_raw/insertAll",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $node[\"Get Token (Metadata)\"].json[\"access_token\"] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1408,
+        1392
+      ],
+      "id": "71c71af3-8764-4b17-afcf-d117133d64bf",
+      "name": "BQ - Insert data in Bigquery",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "minutes"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        832,
+        1392
+      ],
+      "id": "05076453-45c6-4016-824f-dc1f47570640",
+      "name": "Wait",
+      "webhookId": "c62e70e0-035b-4ab9-9985-77510af8ac99"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1760,
+        1184
+      ],
+      "id": "a2c73086-44da-4ef7-95b7-221a96293dc7",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "content": "## Flow Notes  \n\n- **Goal**: Ingest ad spend data into BigQuery.  \n\n### Steps  \n1. **Wait**: Adds a delay between batches.  \n2. **BQ - Check in BigQuery Data ads_spend_raw**: Validates if the table `ads_spend_raw` exists.  \n3. **BQ - Insert data in BigQuery**: Inserts the processed rows.  \n4. **Merge2**: Merges both branches (check + insert) before continuing.  \n\n### Expected Result  \n- If the table exists, the data is inserted.  \n- If not, the flow should create the table or handle the error (depending on the design).  \n",
+        "height": 928,
+        "width": 1312
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        480,
+        656
+      ],
+      "typeVersion": 1,
+      "id": "04fe2359-f870-4b6f-b954-b5cbbf0f0c4e",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/n8n-ads-spend/datasets/ads_warehouse/tables/ads_spend_raw",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $node[\"Get Token (Metadata)\"].json[\"access_token\"] }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2224,
+        1184
+      ],
+      "id": "0781a8d2-4bf7-4639-a9ce-3fb76f2d07ab",
+      "name": "BQ - Get  ads_spend datasetId"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://us-central1-n8n-ads-spend.cloudfunctions.net/train_roas_model",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $node[\"Get Token (Metadata)\"].json[\"access_token\"] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        1184
+      ],
+      "id": "024e4c22-a3b6-415f-be2e-2b05f3028b2e",
+      "name": "BQ - Regression Model to Predict ROAS in cloud function"
+    },
+    {
+      "parameters": {
+        "content": "## Flow Notes TRAIN XGBoost\n\n- **Goal**: Use data from BigQuery to predict ROAS with a regression model.  \n\n### Steps  \n1. **BQ - Get ads_spend datasetId**: Retrieves the `ads_spend` dataset from BigQuery.  \n2. **BQ - Regression Model to Predict ROAS**: Sends the dataset to a regression model endpoint in Cloud Run / Vertex AI to calculate predicted ROAS.  \n\n### Expected Result  \n- The pipeline takes the raw `ads_spend` data.  \n- The regression model returns predictions for ROAS.  \n",
+        "height": 864,
+        "width": 1296,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1840,
+        672
+      ],
+      "typeVersion": 1,
+      "id": "8af09acf-c1aa-4ae6-9afb-05a50e19d278",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        704,
+        -640
+      ],
+      "id": "7741c9b4-58f2-46c6-b2db-78639d23a532",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2976,
+        1184
+      ],
+      "id": "db37feea-cf0a-4fa4-9c5f-f7aceec5055e",
+      "name": "No Operation, do nothing1"
+    },
+    {
+      "parameters": {
+        "path": "22dc8754-52bc-478b-9a9c-aba4d4dafc3e",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1664,
+        -352
+      ],
+      "id": "7d1a2421-158c-4505-a407-7acbc5b524df",
+      "name": "Webhook",
+      "webhookId": "22dc8754-52bc-478b-9a9c-aba4d4dafc3e",
+      "executeOnce": false,
+      "alwaysOutputData": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "height": 608,
+        "width": 784
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2016,
+        -704
+      ],
+      "typeVersion": 1,
+      "id": "35b87db9-a8b4-4b3e-84d3-ebf8cff8159b",
+      "name": "Sticky Note7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        []
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "BQ - Validate table ads_spend_raw",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Token (Metadata)": {
+      "main": [
+        [
+          {
+            "node": "BQ - Check in BigQuery Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation of code": {
+      "main": [
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Validation code": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "BQ - Create ads_warehouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Check in BigQuery Data": {
+      "main": [
+        [
+          {
+            "node": "Validation of code",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "BQ - Validation Exisiting ads_warehouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Validation Exisiting ads_warehouse": {
+      "main": [
+        [
+          {
+            "node": "Validation code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Create ads_warehouse": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "BQ - Validate table ads_spend_raw": {
+      "main": [
+        [
+          {
+            "node": "iF - Validate code 404 is true",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "iF - Validate code 404 is true": {
+      "main": [
+        [
+          {
+            "node": "BQ - Create table ads_spend_raw",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "BQ - Check in BigQuery Data ads_spend_raw",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Check in BigQuery Data ads_spend_raw": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Create table ads_spend_raw": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "If - Validate numRows 0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If - Validate numRows 0": {
+      "main": [
+        [
+          {
+            "node": "CS - Access to Cloud Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CS - Access to Cloud Storage": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Transform to BigQuery Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform to BigQuery Schema": {
+      "main": [
+        [
+          {
+            "node": "Make the batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Make the batch": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Insert data in Bigquery": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "BQ - Insert data in Bigquery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "BQ - Get  ads_spend datasetId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Get  ads_spend datasetId": {
+      "main": [
+        [
+          {
+            "node": "BQ - Regression Model to Predict ROAS in cloud function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BQ - Regression Model to Predict ROAS in cloud function": {
+      "main": [
+        [
+          {
+            "node": "No Operation, do nothing1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Token (Metadata)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1dcc0545-960e-4e19-b066-bafb6b6e2e3e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "id": "NzLIHU5cRGI2vBae",
+  "tags": []
+}
