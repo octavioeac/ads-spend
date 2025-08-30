@@ -356,6 +356,23 @@ ORDER BY data_month DESC
         "total_months": len(months_data)
     }    
 
+# ------------ n8n: simple trigger (GET only, no params) ------------
+@app.get("/trigger-n8n/simple")
+def trigger_n8n_simple():
+    """
+    Call the n8n webhook-test directly (no params).
+    """
+    url = "http://34.171.79.204/webhook-test/22dc8754-52bc-478b-9a9c-aba4d4dafc3e"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        ct = r.headers.get("content-type", "")
+        payload = r.json() if ct.startswith("application/json") else r.text
+        return {"ok": True, "url": url, "method": "GET", "n8n_response": payload}
+    except requests.RequestException as e:
+        logging.exception("n8n simple webhook error")
+        raise HTTPException(status_code=502, detail=f"n8n unreachable: {e}")
+
 
 @app.on_event("startup")
 async def show_routes():
