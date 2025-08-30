@@ -1,0 +1,341 @@
+{
+	"info": {
+		"_postman_id": "60c53920-cd24-4539-8905-0339168cc9f4",
+		"name": "metrics-api",
+		"description": "Collection to test all metrics-api endpoints on Cloud Run",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "33854284"
+	},
+	"item": [
+		{
+			"name": "Health",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/health",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"health"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Root",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						""
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Compare Periods (Metrics)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/metrics?first_start=2025-05-01&first_end=2025-05-31&second_start=2025-06-01&second_end=2025-06-30",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"metrics"
+					],
+					"query": [
+						{
+							"key": "first_start",
+							"value": "2025-05-01"
+						},
+						{
+							"key": "first_end",
+							"value": "2025-05-31"
+						},
+						{
+							"key": "second_start",
+							"value": "2025-06-01"
+						},
+						{
+							"key": "second_end",
+							"value": "2025-06-30"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "NLQ Parse (execute=false)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"question\": \"Compare CAC and ROAS for last 30 days vs prior 30 days\",\n  \"execute\": false\n}"
+				},
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/nlq/parse",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"nlq",
+						"parse"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "NLQ Parse (execute=true)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"question\": \"Compare spend for last 7 days vs previous 7 days\",\n  \"execute\": true\n}"
+				},
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/nlq/parse",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"nlq",
+						"parse"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "XGBoost Prediction",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n        \"platform\":\"Google\",\n        \"account\":\"acc1\",\n        \"country\":\"MX\",\n        \"device\":\"mobile\",\n        \"spend\":120,\n        \"impressions\":4000\n      }"
+				},
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/ml/predict",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"ml",
+						"predict"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "XGBoost Prediction Batch",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n        \"instances\": [\n          {\"platform\":\"Google\",\"account\":\"acc1\",\"country\":\"MX\",\"device\":\"mobile\",\"spend\":120,\"impressions\":4000},\n          {\"platform\":\"Meta\",\"account\":\"acc2\",\"country\":\"US\",\"device\":\"desktop\",\"spend\":200,\"impressions\":8000}\n        ]\n      }"
+				},
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/ml/predict-batch",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"ml",
+						"predict-batch"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Trigger n8n",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/trigger-n8n?insertId=test123&amount=100",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"trigger-n8n"
+					],
+					"query": [
+						{
+							"key": "insertId",
+							"value": "test123"
+						},
+						{
+							"key": "amount",
+							"value": "100"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Diagnostics - BigQuery",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/_diag/bq",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"_diag",
+						"bq"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "BigQuery - Table Exists",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/bq/exists",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"bq",
+						"exists"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Available Months",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/metadata/months-available",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"metadata",
+						"months-available"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Trigger execute n8n",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://metrics-api-237577500123.us-central1.run.app/trigger-n8n/simple?type=prod",
+					"protocol": "https",
+					"host": [
+						"metrics-api-237577500123",
+						"us-central1",
+						"run",
+						"app"
+					],
+					"path": [
+						"trigger-n8n",
+						"simple"
+					],
+					"query": [
+						{
+							"key": "type",
+							"value": "prod"
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
