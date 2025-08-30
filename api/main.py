@@ -362,7 +362,7 @@ def trigger_n8n_simple():
     """
     Call the n8n webhook-test directly (no params).
     """
-    url = "http://34.171.79.204/webhook-test/22dc8754-52bc-478b-9a9c-aba4d4dafc3e"
+    url = "http://34.171.79.204:5678/webhook/22dc8754-52bc-478b-9a9c-aba4d4dafc3e"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
