@@ -7,6 +7,14 @@ import subprocess
 from pathlib import Path
 import requests
 from routers import nlq, metrics
+from typing import List
+from pydantic import BaseModel, Field, constr, confloat, conint
+
+PREDICT_CF_URL = os.getenv(
+    "PREDICT_CF_URL",
+    "https://us-central1-n8n-ads-spend.cloudfunctions.net/predict_roas"
+)
+PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "") 
 
 # ------------ App & Logging ------------
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -380,6 +388,70 @@ def trigger_n8n_simple(type: str = Query("test", description="Choose 'test' or '
     except requests.RequestException as e:
         logging.exception("n8n simple webhook error")
         raise HTTPException(status_code=502, detail=f"n8n unreachable: {e}")
+
+class PredictItem(BaseModel):
+    platform: constr(strip_whitespace=True, min_length=1)
+    account: constr(strip_whitespace=True, min_length=1)
+    country: constr(strip_whitespace=True, min_length=2, max_length=3) = Field(
+        description="ISO country code like MX/US"
+    )
+    device: constr(strip_whitespace=True, min_length=1)
+    spend: confloat(strict=False)       # acepta "120" o 120.0
+    impressions: conint(strict=False, ge=0)
+
+class PredictBatch(BaseModel):
+    instances: List[PredictItem]
+
+class PredictResponse(BaseModel):
+    predictions: List[float]
+
+
+# --- ADD: helper to call Cloud Function of prediction ---
+def _call_predict_cf(payload: dict, timeout: int = 30) -> dict:
+    if not PREDICT_CF_URL:
+        raise HTTPException(status_code=500, detail="PREDICT_CF_URL is not configured")
+    headers = {"Content-Type": "application/json"}
+    if PREDICT_API_KEY:
+        headers["x-api-key"] = PREDICT_API_KEY
+    try:
+        r = requests.post(PREDICT_CF_URL, json=payload, headers=headers, timeout=timeout)
+        # La CF devuelve 400 con {"status":"error","message":"..."} para inputs inválidos
+        if r.status_code >= 400:
+            try:
+                err = r.json()
+            except Exception:
+                err = {"status": "error", "message": r.text[:500]}
+            logging.error("Predict CF error %s: %s", r.status_code, err)
+            raise HTTPException(status_code=r.status_code, detail=err)
+        return r.json()
+    except requests.RequestException as e:
+        logging.exception("Predict CF unreachable")
+        raise HTTPException(status_code=502, detail=f"Predict CF unreachable: {e}")
+
+# --- ADD: endpoints ML ---
+@app.post("/ml/predict", response_model=PredictResponse, tags=["ml"])
+def predict_single(item: PredictItem):
+    """
+    Single prediction. For multiple rows, use /ml/predict-batch.
+    """
+    payload = item.dict()
+    data = _call_predict_cf(payload)
+    preds = data.get("predictions")
+    if not isinstance(preds, list):
+        raise HTTPException(status_code=502, detail=f"Unexpected CF response: {data}")
+    return {"predictions": preds}
+
+@app.post("/ml/predict-batch", response_model=PredictResponse, tags=["ml"])
+def predict_batch(batch: PredictBatch):
+    """
+    Batch prediction using 'instances'.
+    """
+    payload = {"instances": [i.dict() for i in batch.instances]}
+    data = _call_predict_cf(payload)
+    preds = data.get("predictions")
+    if not isinstance(preds, list) or len(preds) != len(batch.instances):
+        raise HTTPException(status_code=502, detail=f"Unexpected CF response: {data}")
+    return {"predictions": preds}
 
 
 
